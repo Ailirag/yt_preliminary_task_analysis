@@ -1,0 +1,96 @@
+# ===== Основной конфиг ИИ-анализатора =====
+queue: ONE
+component_name: "ИИ анализ"
+
+# dry-run | live. Запись в трекер идёт ТОЛЬКО при mode: live И флаге --live (двойной предохранитель).
+mode: dry-run
+
+bugs:
+  # ПЕРЕКЛЮЧАТЕЛЬ отбора (переопределяется CLI --selection):
+  #   no-done-tag  - все незакрытые ошибки без done_tag
+  #   trigger-tag  - только ошибки с тегом trigger_tag (и без done_tag)
+  selection: no-done-tag
+  trigger_tag: "к_анализу_ии"
+  done_tag: "ИИ_анализ_проведен"
+  complexity_tags:
+    simple: "ИИ-простая"
+    complex: "ИИ-сложная"
+  subtask:
+    type: task
+    summary_prefix: "[ИИ анализ] "
+    unique_prefix: "ai-bug"
+
+ft:
+  trigger_tag: "К анализу ИИ"
+  done_tag: "ИИ_анализ_ФТ_проведен"
+  require_doc_link: true          # documentationLink пуст -> пропуск (тег не трогаем)
+  complexity_tags:
+    simple: "ИИ-простая"
+    complex: "ИИ-сложная"
+  subtask:
+    type: task
+    summary_prefix: "[ИИ анализ ФТ] "
+    unique_prefix: "ai-ft"
+
+limits:
+  max_issues_per_run: 5
+  max_images_per_issue: 8
+  max_image_mb: 15
+  max_wiki_pages_per_issue: 5
+  max_tool_steps: 15              # бюджет агентного цикла (CLI --max-steps)
+  max_comment_chars: 30000        # суммарное усечение комментариев
+  max_wiki_chars: 40000           # усечение одной вики-страницы
+  max_tool_result_chars: 20000    # усечение результата одного инструмента
+  throttle_between_issues_s: 10
+  max_consecutive_errors: 3
+
+onec:
+  enabled: true
+  vecgraph_dir: "vendor/onec-vecgraph"
+  # Путь к выгрузке конфигурации 1С УТ (git-репозиторий с XML Конфигуратора).
+  # ЗАДАТЬ ПЕРЕД ПЕРВЫМ ПРОГОНОМ. Ревизия попадает в отчёт.
+  dump_path: ""
+  # Команда запуска MCP-сервера onec-lite (stdio); {dump_path} подставляется из onec.dump_path
+  command: "uv"
+  args: ["run", "--directory", "{vecgraph_dir}", "onec-lite", "stdio", "--root", "{dump_path}"]
+  env: {}                         # доп. переменные ONEC_LITE_* при необходимости
+  # Белый список инструментов для LLM (пусто = все 29). Имена сняты с onec-lite.
+  tool_whitelist:
+    - overview          # обзор конфигурации
+    - list_objects      # список/поиск объектов метаданных
+    - search_metadata   # поиск по метаданным
+    - get_object        # структура объекта (реквизиты, ТЧ, формы, модули)
+    - get_form          # состав формы (для ошибок UI)
+    - search_code       # поиск по коду
+    - fts_search        # полнотекстовый поиск (BM25)
+    - find_routine      # найти процедуру/функцию
+    - read_routine      # прочитать процедуру
+    - read_module       # прочитать модуль
+    - find_callers      # кто вызывает (радиус поражения)
+    - find_callees      # что вызывает
+    - call_graph        # граф вызовов
+    - find_overrides    # переопределения/расширения
+    - find_handlers     # обработчики событий и подписки
+    - writes_to         # движения: кто пишет в регистры
+    - platform_docinfo  # справка платформы 1С
+  start_timeout_s: 120
+  call_timeout_s: 120
+
+wiki:
+  api: "https://api.wiki.yandex.net"
+  allowed_hosts: ["wiki.yandex.ru"]
+  doc_field: "documentationLink"
+
+tracker:
+  base_url: "https://api.tracker.yandex.net"
+  token_env: "YATRACKER_TOKEN_GT"
+  org_id_env: "YATRACKER_ORGID_GT"
+  org_header: "X-Org-ID"          # организация Yandex 360
+
+report:
+  language: ru
+  disclaimer: "⚠️ Автоматический предварительный ИИ-анализ. Не является финальным вердиктом — требует проверки разработчиком."
+
+paths:
+  work_dir: "work"
+  journal_dir: "journal"

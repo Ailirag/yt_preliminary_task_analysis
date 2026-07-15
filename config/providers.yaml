@@ -1,0 +1,44 @@
+# ===== LLM-провайдеры и роли моделей =====
+# Роль указывается как "<провайдер>/<модель>". Переопределяется CLI: --analyst, --vision.
+roles:
+  analyst: zai/glm-5.2       # основной анализ: текст + инструменты
+  vision: zai/glm-4.6v       # разбор скриншотов; пусто "" -> картинки пропускаются с пометкой
+
+limits:
+  max_output_tokens: 8000
+  request_timeout_s: 300
+  retries: 3
+
+providers:
+  zai:
+    kind: openai-compat
+    base_url: "https://api.z.ai/api/paas/v4"
+    api_key_env: ZAI_API_KEY
+    models:
+      glm-5.2:  { tools: true, vision: false }
+      glm-4.6v: { tools: true, vision: true }
+
+  yandex:
+    kind: openai-compat
+    base_url: "https://llm.api.cloud.yandex.net/v1"
+    api_key_env: YANDEX_API_KEY
+    # Имя модели собирается по шаблону; folder_id берётся из env YANDEX_FOLDER_ID
+    model_uri_template: "gpt://{folder_id}/{model}"
+    folder_id_env: YANDEX_FOLDER_ID
+    models:
+      yandexgpt:        { tools: true, vision: false }
+      yandexgpt/latest: { tools: true, vision: false }
+
+  claude:
+    kind: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    models:
+      claude-opus-4-8: { tools: true, vision: true }
+      claude-sonnet-5: { tools: true, vision: true }
+
+  openai:
+    kind: openai-compat
+    base_url: "https://api.openai.com/v1"
+    api_key_env: OPENAI_API_KEY
+    models:
+      gpt-5: { tools: true, vision: true }   # имя модели уточнить при подключении ключа

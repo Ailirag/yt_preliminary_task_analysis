@@ -1,0 +1,51 @@
+> << disclaimer >>
+>
+> Родительская задача: **<< parent_key >>** | Дата анализа: << date >> | Модели: << models >> | Ревизия конфигурации: << dump_rev >>
+
+## 1. Резюме
+
+<< r.summary >>
+
+**Оценка сложности: << 'Простая' if r.complexity == 'simple' else 'Сложная' >>** — << r.complexity_reason >>
+
+## 2. Воспроизведение
+
+<< r.reproduction or '_Не установлено._' >>
+
+## 3. Вероятные причины
+
+<% if r.hypotheses %><% for h in r.hypotheses %>- **<< h.cause >>** (уверенность: << h.confidence >>)<% if h.basis %> — << h.basis >><% endif %>
+<% endfor %><% else %>_Гипотезы не сформированы._
+<% endif %>
+
+## 4. Затронутые объекты конфигурации
+
+<% if r.affected_objects %>| Объект метаданных | Модуль | Процедура / функция | Роль в проблеме |
+|---|---|---|---|
+<% for o in r.affected_objects %>| << o.object >> | << o.module >> | << o.procedure >> | << o.role >> |
+<% endfor %><% else %>_Не установлены._
+<% endif %>
+
+## 5. << 'Драфт решения' if r.complexity == 'simple' else 'Рекомендуемые шаги диагностики' >>
+
+<< r.draft_solution or '_Не сформирован._' >>
+
+## 6. Недостающая информация / вопросы к постановщику
+
+<% if r.missing_info %><% for q in r.missing_info %>- [ ] << q >>
+<% endfor %><% else %>_Информации достаточно._
+<% endif %>
+
+## 7. Источники анализа
+
+- **Скриншоты:** << sources.images_note >>
+- **Вики:** << sources.wiki_note >>
+<% if r.code_refs %>- **Код:**
+<% for c in r.code_refs %>  - << c >>
+<% endfor %><% else %>- **Код:** << sources.code_note >>
+<% endif %>
+<% if r.notes %>
+## Примечания
+
+<< r.notes >>
+<% endif %>
