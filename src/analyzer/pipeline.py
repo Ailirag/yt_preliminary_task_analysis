@@ -39,11 +39,21 @@ class RunContext:
     max_steps: int
     component_id: int
     project_root: Path
-    usage: dict = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
+    # расход токенов раздельно по ролям моделей (analyst — GLM-5.2, vision — GLM-4.6V)
+    usage: dict = field(default_factory=lambda: {
+        "analyst": {"input_tokens": 0, "output_tokens": 0, "calls": 0},
+        "vision": {"input_tokens": 0, "output_tokens": 0, "calls": 0},
+    })
 
-    def add_usage(self, usage: dict) -> None:
-        for k in ("input_tokens", "output_tokens"):
-            self.usage[k] = self.usage.get(k, 0) + int(usage.get(k) or 0)
+    def add_usage(self, role: str, usage: dict) -> None:
+        bucket = self.usage.setdefault(role, {"input_tokens": 0, "output_tokens": 0, "calls": 0})
+        bucket["input_tokens"] += int(usage.get("input_tokens") or 0)
+        bucket["output_tokens"] += int(usage.get("output_tokens") or 0)
+        bucket["calls"] += 1
+
+    def usage_snapshot(self) -> dict:
+        """Глубокая копия счётчиков (для вычисления пер-задачной дельты)."""
+        return {role: dict(vals) for role, vals in self.usage.items()}
 
 
 # ---------- выборка ----------
@@ -205,7 +215,7 @@ def analyze_images(ctx: RunContext, images: list[ImagePart]) -> list[str]:
                 Msg.system(VISION_PROMPT),
                 Msg.user(f"Скриншот {i} из задачи:", img),
             ])
-            ctx.add_usage(resp.usage)
+            ctx.add_usage("vision", resp.usage)
             descriptions.append(resp.text.strip() or "[пустой ответ vision-модели]")
         except Exception as e:  # noqa: BLE001
             log.warning("Vision-анализ картинки %d не удался: %s", i, e)
@@ -228,7 +238,7 @@ def run_analysis(ctx: RunContext, system_prompt: str, dossier: str,
     use_tools = bool(tools) and ctx.analyst.supports_tools
     while True:
         resp = ctx.analyst.chat(messages, tools=tools if use_tools else None)
-        ctx.add_usage(resp.usage)
+        ctx.add_usage("analyst", resp.usage)
         if not resp.tool_calls:
             break
         if steps >= ctx.max_steps:
@@ -238,7 +248,7 @@ def run_analysis(ctx: RunContext, system_prompt: str, dossier: str,
                 messages.append(Msg.tool_result(tc.id, "[бюджет вызовов инструментов исчерпан]"))
             messages.append(Msg.user("Бюджет инструментов исчерпан. Верни финальный JSON по схеме."))
             resp = ctx.analyst.chat(messages)
-            ctx.add_usage(resp.usage)
+            ctx.add_usage("analyst", resp.usage)
             break
         messages.append(Msg.assistant(resp.text, resp.tool_calls))
         for tc in resp.tool_calls:
@@ -255,7 +265,7 @@ def run_analysis(ctx: RunContext, system_prompt: str, dossier: str,
         messages.append(Msg.assistant(resp.text))
         messages.append(Msg.user("Ответ не распознан. Верни СТРОГО один JSON-объект по схеме, без текста вокруг."))
         resp = ctx.analyst.chat(messages)
-        ctx.add_usage(resp.usage)
+        ctx.add_usage("analyst", resp.usage)
         data = extract_json(resp.text)
     if data is None:
         return None, resp.text, steps
@@ -404,6 +414,15 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
 
 # ---------- прогон ----------
 
+def _usage_delta(before: dict, after: dict) -> dict:
+    """Расход за одну задачу = снимок после минус снимок до, раздельно по ролям."""
+    out: dict = {}
+    for role, vals in after.items():
+        b = before.get(role, {})
+        out[role] = {k: int(v) - int(b.get(k, 0)) for k, v in vals.items()}
+    return out
+
+
 def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
                  issue_key: str | None = None) -> list[dict]:
     issues = select_issues(ctx, workflow, selection, limit, issue_key)
@@ -411,6 +430,7 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
     results: list[dict] = []
     consecutive_errors = 0
     for i, issue in enumerate(issues):
+        before = ctx.usage_snapshot()
         try:
             r = process_issue(ctx, issue, workflow)
             consecutive_errors = consecutive_errors + 1 if r.get("action") == "error" else 0
@@ -420,7 +440,7 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
             consecutive_errors += 1
         r["workflow"] = workflow
         r["mode"] = "live" if ctx.live else "dry-run"
-        r["usage_total"] = dict(ctx.usage)
+        r["usage"] = _usage_delta(before, ctx.usage)  # пер-задачный расход по ролям
         ctx.journal.run_event(**r)
         results.append(r)
         ctx.tracker.finish_iteration()  # полный доступ к созданным — только на время итерации

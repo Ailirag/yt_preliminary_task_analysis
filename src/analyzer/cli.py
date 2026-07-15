@@ -99,7 +99,7 @@ def _build_run_context(args, workflow: str) -> tuple[RunContext, OnecMCP | None]
     return ctx, onec
 
 
-def _print_summary(results: list[dict]) -> None:
+def _print_summary(results: list[dict], ctx) -> None:
     print("\n===== ИТОГИ ПРОГОНА =====")
     for r in results:
         line = f"  {r.get('issue')}: {r.get('action')}"
@@ -112,9 +112,28 @@ def _print_summary(results: list[dict]) -> None:
         if r.get("error"):
             line += f" | ОШИБКА: {r['error']}"
         print(line)
-    if results:
-        u = results[-1].get("usage_total") or {}
-        print(f"  Токены за прогон: in={u.get('input_tokens', 0)} out={u.get('output_tokens', 0)}")
+
+    # суммарный расход токенов раздельно по ролям моделей
+    totals: dict = {}
+    for r in results:
+        for role, vals in (r.get("usage") or {}).items():
+            t = totals.setdefault(role, {"input_tokens": 0, "output_tokens": 0, "calls": 0})
+            for k in t:
+                t[k] += int(vals.get(k, 0))
+    if totals:
+        labels = {"analyst": ctx.analyst.label(),
+                  "vision": ctx.vision.label() if ctx.vision else "не задана"}
+        print("  Токены за прогон (раздельно по моделям):")
+        grand_in = grand_out = 0
+        for role in ("analyst", "vision"):
+            v = totals.get(role)
+            if not v or (v["input_tokens"] == 0 and v["output_tokens"] == 0 and v["calls"] == 0):
+                continue
+            print(f"    {role} [{labels.get(role, role)}]: "
+                  f"in={v['input_tokens']} out={v['output_tokens']} вызовов={v['calls']}")
+            grand_in += v["input_tokens"]
+            grand_out += v["output_tokens"]
+        print(f"    ИТОГО: in={grand_in} out={grand_out}")
 
 
 # ---------- команды ----------
@@ -124,7 +143,7 @@ def cmd_run(args, workflow: str) -> int:
     selection = getattr(args, "selection", None) or ctx.acfg.bugs.selection
     try:
         results = run_workflow(ctx, workflow, selection, args.limit, args.issue)
-        _print_summary(results)
+        _print_summary(results, ctx)
         return 0 if all(r.get("action") != "error" for r in results) else 2
     finally:
         if onec:
