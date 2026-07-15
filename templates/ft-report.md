@@ -46,6 +46,7 @@
 
 - **Скриншоты:** << sources.images_note >>
 - **Вики:** << sources.wiki_note >>
+- **Связанные задачи:** << sources.nav_note >>
 <% if r.code_refs %>- **Код:**
 <% for c in r.code_refs %>  - << c >>
 <% endfor %><% else %>- **Код:** << sources.code_note >>

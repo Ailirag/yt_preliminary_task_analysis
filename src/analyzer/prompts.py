@@ -54,46 +54,63 @@ COMPLEXITY_CRITERIA = """\
 - complex (ЛЮБОЕ из): причина не установлена достоверно; несколько подсистем/интеграции/обмены;
   нужны изменения метаданных или данных; воспроизведение неясно; без недостающей информации диагноз невозможен."""
 
-TOOLS_GUIDANCE = """\
+CODE_TOOLS_GUIDANCE = """\
 Тебе доступны инструменты анализа кода конфигурации 1С (поиск по коду, структура объектов,
 граф вызовов, справка платформы). Стратегия — от точного к широкому:
 1) литералы сообщений об ошибке из текста/скриншотов -> полнотекстовый поиск по коду;
 2) имена объектов метаданных из постановки -> структура объекта (реквизиты, ТЧ, формы, модули);
 3) для подозреваемой процедуры -> граф вызовов (кто вызывает, переопределения, обработчики);
-4) платформенные методы из текстов ошибок -> справка платформы.
-Не делай лишних вызовов: у тебя бюджет {max_steps} обращений к инструментам.
-Когда данных достаточно — верни финальный JSON без вызова инструментов."""
+4) платформенные методы из текстов ошибок -> справка платформы."""
+
+NAV_TOOLS_GUIDANCE = """\
+Тебе доступны инструменты навигации по трекеру и вики (ТОЛЬКО чтение):
+- tracker_get_issue(key) — прочитать другую задачу по ключу; её текст и описания её скриншотов
+  подготавливаются автоматически, тебе вернётся готовый текст;
+- tracker_search_issues(query) — найти задачи в очереди (условие БЕЗ 'Queue:', напр. Summary: "ввоз");
+- wiki_get_page(url) — прочитать страницу вики.
+Если задача ссылается на другую («в рамках задачи 1915», ключ вида ONE-1915) и это существенно
+для понимания причины — прочитай её. Не ходи по ссылкам без необходимости. Задача, найденная по
+голому номеру, может оказаться нерелевантной — при сомнении отметь это в missing_info."""
+
+TOOLS_BUDGET_NOTE = ("Все инструменты делят общий бюджет {max_steps} обращений. Не делай лишних "
+                     "вызовов; когда данных достаточно — верни финальный JSON без вызова инструментов.")
+
+NO_TOOLS_NOTE = ("Инструменты в этом прогоне недоступны — анализируй по предоставленному контексту, "
+                 "отражай ограничения в missing_info/notes.")
 
 
-def bug_system_prompt(max_steps: int, tools_available: bool) -> str:
+def _tools_section(parts: list[str], max_steps: int, code_tools: bool, nav_tools: bool) -> None:
+    if code_tools:
+        parts.append(CODE_TOOLS_GUIDANCE)
+    if nav_tools:
+        parts.append(NAV_TOOLS_GUIDANCE)
+    if code_tools or nav_tools:
+        parts.append(TOOLS_BUDGET_NOTE.format(max_steps=max_steps))
+    else:
+        parts.append(NO_TOOLS_NOTE)
+
+
+def bug_system_prompt(max_steps: int, code_tools: bool, nav_tools: bool) -> str:
     parts = [
         "Ты — ведущий аналитик-разработчик 1С:Предприятие. Твоя задача — предварительный анализ "
         "ошибки из трекера: понять проблему, найти вероятную причину в коде конфигурации, оценить "
         "сложность исправления и подготовить черновик решения. Отвечай на русском языке.",
         INJECTION_GUARD,
     ]
-    if tools_available:
-        parts.append(TOOLS_GUIDANCE.format(max_steps=max_steps))
-    else:
-        parts.append("Инструменты доступа к коду недоступны в этом прогоне — анализируй по "
-                     "предоставленному контексту, отражай ограничения в missing_info/notes.")
+    _tools_section(parts, max_steps, code_tools, nav_tools)
     parts.append(COMPLEXITY_CRITERIA)
     parts.append(ANALYSIS_JSON_SCHEMA_TEXT)
     return "\n\n".join(parts)
 
 
-def ft_system_prompt(max_steps: int, tools_available: bool) -> str:
+def ft_system_prompt(max_steps: int, code_tools: bool, nav_tools: bool) -> str:
     parts = [
         "Ты — ведущий аналитик-разработчик 1С:Предприятие. Твоя задача — анализ готового "
         "функционального требования (ФТ): оценить его полноту, спроецировать на конфигурацию "
         "и подготовить черновик плана реализации. Отвечай на русском языке.",
         INJECTION_GUARD,
     ]
-    if tools_available:
-        parts.append(TOOLS_GUIDANCE.format(max_steps=max_steps))
-    else:
-        parts.append("Инструменты доступа к коду недоступны в этом прогоне — анализируй по "
-                     "предоставленному контексту, отражай ограничения в missing_info/notes.")
+    _tools_section(parts, max_steps, code_tools, nav_tools)
     parts.append(COMPLEXITY_CRITERIA)
     parts.append(FT_JSON_SCHEMA_TEXT)
     return "\n\n".join(parts)

@@ -44,6 +44,9 @@ class RunContext:
         "analyst": {"input_tokens": 0, "output_tokens": 0, "calls": 0},
         "vision": {"input_tokens": 0, "output_tokens": 0, "calls": 0},
     })
+    vision_calls: int = 0                                 # обращений к vision в рамках текущего анализа
+    nav_log: list = field(default_factory=list)           # след навигации (для отчёта/журнала)
+    related_cache: dict = field(default_factory=dict)     # ключ задачи -> готовый текст (кэш на прогон)
 
     def add_usage(self, role: str, usage: dict) -> None:
         bucket = self.usage.setdefault(role, {"input_tokens": 0, "output_tokens": 0, "calls": 0})
@@ -108,6 +111,33 @@ def _issue_text_blob(issue: dict, comments: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _download_images(ctx: RunContext, key: str, attachments: list[dict]) -> tuple[list[ImagePart], list[str]]:
+    """Скачивает картинки-вложения задачи в пределах лимитов. Возвращает (картинки, пропущенные)."""
+    lim = ctx.acfg.limits
+    images: list[ImagePart] = []
+    skipped: list[str] = []
+    max_bytes = lim.max_image_mb * 1024 * 1024
+    for att in attachments:
+        mime = (att.get("mimetype") or "").lower()
+        name = att.get("name") or "?"
+        if mime not in IMAGE_MIMES:
+            skipped.append(f"{name} ({mime or 'без типа'} — не картинка)")
+            continue
+        if len(images) >= lim.max_images_per_issue:
+            skipped.append(f"{name} (превышен лимит {lim.max_images_per_issue})")
+            continue
+        size = int(att.get("size") or 0)
+        if size > max_bytes:
+            skipped.append(f"{name} (размер {size // 1024**2}МБ > лимита)")
+            continue
+        try:
+            data = ctx.tracker.download_attachment(key, att)
+            images.append(ImagePart(data=data, mime="image/jpeg" if mime == "image/jpg" else mime))
+        except Exception as e:  # noqa: BLE001
+            skipped.append(f"{name} (ошибка скачивания: {e})")
+    return images, skipped
+
+
 def build_dossier(ctx: RunContext, issue: dict, workflow: str) -> tuple[str, list[ImagePart], dict]:
     """Возвращает (текст досье, картинки, sources-метаданные)."""
     lim = ctx.acfg.limits
@@ -117,27 +147,7 @@ def build_dossier(ctx: RunContext, issue: dict, workflow: str) -> tuple[str, lis
     attachments = ctx.tracker.get_attachments(key)
 
     # --- картинки ---
-    images: list[ImagePart] = []
-    skipped_images: list[str] = []
-    max_bytes = lim.max_image_mb * 1024 * 1024
-    for att in attachments:
-        mime = (att.get("mimetype") or "").lower()
-        name = att.get("name") or "?"
-        if mime not in IMAGE_MIMES:
-            skipped_images.append(f"{name} ({mime or 'без типа'} — не картинка)")
-            continue
-        if len(images) >= lim.max_images_per_issue:
-            skipped_images.append(f"{name} (превышен лимит {lim.max_images_per_issue})")
-            continue
-        size = int(att.get("size") or 0)
-        if size > max_bytes:
-            skipped_images.append(f"{name} (размер {size // 1024**2}МБ > лимита)")
-            continue
-        try:
-            data = ctx.tracker.download_attachment(key, att)
-            images.append(ImagePart(data=data, mime="image/jpeg" if mime == "image/jpg" else mime))
-        except Exception as e:  # noqa: BLE001
-            skipped_images.append(f"{name} (ошибка скачивания: {e})")
+    images, skipped_images = _download_images(ctx, key, attachments)
 
     # --- вики ---
     wiki_urls: list[str] = []
@@ -205,22 +215,181 @@ def build_dossier(ctx: RunContext, issue: dict, workflow: str) -> tuple[str, lis
 
 # ---------- vision ----------
 
-def analyze_images(ctx: RunContext, images: list[ImagePart]) -> list[str]:
-    """Сайдкар-описания скриншотов vision-моделью. Ошибки не фатальны."""
+def analyze_images(ctx: RunContext, images: list[ImagePart], source: str = "задача") -> list[str]:
+    """Сайдкар-описания скриншотов vision-моделью. Ошибки не фатальны, есть общий потолок вызовов."""
     descriptions: list[str] = []
     assert ctx.vision is not None
+    cap = ctx.acfg.limits.max_vision_calls_per_issue
     for i, img in enumerate(images, 1):
+        if ctx.vision_calls >= cap:
+            descriptions.append(f"[лимит vision-вызовов ({cap}) исчерпан — скриншот {i} не разобран]")
+            continue
+        ctx.vision_calls += 1
         try:
             resp = ctx.vision.chat([
                 Msg.system(VISION_PROMPT),
-                Msg.user(f"Скриншот {i} из задачи:", img),
+                Msg.user(f"Скриншот {i} ({source}):", img),
             ])
             ctx.add_usage("vision", resp.usage)
             descriptions.append(resp.text.strip() or "[пустой ответ vision-модели]")
         except Exception as e:  # noqa: BLE001
-            log.warning("Vision-анализ картинки %d не удался: %s", i, e)
+            log.warning("Vision-анализ (%s) картинки %d не удался: %s", source, i, e)
             descriptions.append(f"[ошибка vision-анализа: {e}]")
     return descriptions
+
+
+# ---------- навигационные инструменты (read-only) ----------
+
+def fetch_issue_context(ctx: RunContext, key: str) -> str:
+    """Текст связанной задачи для аналитика: описание, комментарии, связи и описания её
+    скриншотов (vision прогоняется здесь, т.к. аналитик текстовый). Кэшируется на прогон."""
+    key = key.strip().upper()
+    cached = ctx.related_cache.get(key)
+    if cached is not None:
+        return cached
+    nav = ctx.acfg.navigation
+    prefixes = [p.upper() for p in (nav.known_prefixes or [ctx.acfg.queue])]
+    prefix = key.split("-", 1)[0] if "-" in key else ""
+    if prefix not in prefixes:
+        return (f"[доступ к задаче {key} не разрешён: читать можно только задачи с префиксами "
+                f"{prefixes}. Задачи других очередей недоступны.]")
+    try:
+        issue = ctx.tracker.get_issue(key)
+    except Exception as e:  # noqa: BLE001
+        code = getattr(getattr(e, "response", None), "status_code", None)
+        msg = {403: "нет доступа", 404: "не найдена"}.get(code, f"{type(e).__name__}: {e}")
+        out = f"[задача {key}: {msg}]"
+        ctx.related_cache[key] = out
+        return out
+
+    comments = ctx.tracker.get_comments(key)
+    links = ctx.tracker.get_links(key)
+    attachments = ctx.tracker.get_attachments(key)
+
+    lines = [f"# Связанная задача {key}: {issue.get('summary', '')}"]
+    status = (issue.get("status") or {}).get("display", "?")
+    itype = (issue.get("type") or {}).get("display", "?")
+    lines.append(f"Статус: {status} | Тип: {itype}")
+    doc_link = issue.get(ctx.acfg.wiki.doc_field) or ""
+    if doc_link:
+        lines.append(f"Ссылка на документацию: {doc_link}")
+    lines.append("\n## Описание\n")
+    lines.append(truncate(issue.get("description") or "(пусто)", nav.max_issue_chars, "описание усечено"))
+    if comments:
+        lines.append(f"\n## Комментарии ({len(comments)})\n")
+        budget = nav.max_issue_chars
+        for c in comments:
+            author = (c.get("createdBy") or {}).get("display", "?")
+            entry = f"**{author}**: {(c.get('text') or '').strip()}\n"
+            if budget - len(entry) < 0:
+                lines.append(f"[... комментарии усечены, всего {len(comments)}]")
+                break
+            lines.append(entry)
+            budget -= len(entry)
+    if links:
+        lines.append("\n## Связи\n")
+        for lk in links:
+            obj = lk.get("object") or {}
+            rel = (lk.get("type") or {}).get("id", "связана")
+            lines.append(f"- {rel}: {obj.get('key', '?')} — {obj.get('display', '')}")
+
+    # скриншоты -> vision -> текст (внутри инструмента, аналитику вернётся готовый текст)
+    images, skipped = _download_images(ctx, key, attachments)
+    if images:
+        if ctx.vision is not None:
+            descs = analyze_images(ctx, images, source=f"задача {key}")
+            lines.append("\n## Скриншоты (описания vision-модели)\n")
+            for i, d in enumerate(descs, 1):
+                lines.append(f"### Скриншот {i}\n{d}\n")
+        else:
+            lines.append(f"\n[скриншотов: {len(images)}; vision отключён — не разобраны]\n")
+    if skipped:
+        lines.append("\n[пропущенные вложения: " + "; ".join(skipped) + "]\n")
+
+    out = truncate("\n".join(lines), ctx.acfg.limits.max_tool_result_chars,
+                   "контекст связанной задачи усечён")
+    ctx.related_cache[key] = out
+    return out
+
+
+_NAV_TOOLS = {"tracker_get_issue", "tracker_search_issues", "wiki_get_page"}
+
+
+def navigation_tool_specs(nav) -> list[ToolSpec]:
+    """ToolSpec'и read-only навигации согласно config.navigation.tools."""
+    if not nav.enabled:
+        return []
+    specs: list[ToolSpec] = []
+    if "get_issue" in nav.tools:
+        specs.append(ToolSpec(
+            name="tracker_get_issue",
+            description="Прочитать другую задачу трекера по ключу (например ONE-1915): описание, "
+                        "комментарии, связи и текстовые описания её скриншотов (разбираются автоматически). "
+                        "Только чтение. Используй, когда задача ссылается на другую и это важно.",
+            schema={"type": "object",
+                    "properties": {"key": {"type": "string", "description": "Ключ задачи, напр. ONE-1915"}},
+                    "required": ["key"]},
+        ))
+    if "search_issues" in nav.tools:
+        specs.append(ToolSpec(
+            name="tracker_search_issues",
+            description="Найти задачи в очереди по условию Yandex Tracker Query Language БЕЗ 'Queue:' "
+                        "(напр. Summary: \"заявление о ввозе\"). Возвращает ключ, тему, статус. Только чтение.",
+            schema={"type": "object",
+                    "properties": {"query": {"type": "string", "description": "Условие без Queue:"}},
+                    "required": ["query"]},
+        ))
+    if "get_wiki" in nav.tools:
+        specs.append(ToolSpec(
+            name="wiki_get_page",
+            description="Прочитать страницу Yandex Wiki по URL (напр. из поля «Ссылка на документацию»). "
+                        "Только чтение.",
+            schema={"type": "object",
+                    "properties": {"url": {"type": "string"}},
+                    "required": ["url"]},
+        ))
+    return specs
+
+
+def _dispatch_navigation(ctx: RunContext, name: str, args: dict) -> str:
+    try:
+        if name == "tracker_get_issue":
+            key = str(args.get("key", "")).strip()
+            ctx.nav_log.append(f"issue:{key}")
+            return fetch_issue_context(ctx, key) if key else "[не указан ключ задачи]"
+        if name == "tracker_search_issues":
+            q = str(args.get("query", "")).strip()
+            ctx.nav_log.append(f"search:{truncate(q, 60, '')}")
+            if not q:
+                return "[пустой запрос]"
+            full = q if q.lower().startswith("queue:") else f"Queue: {ctx.acfg.queue} {q}"
+            n = ctx.acfg.navigation.max_search_results
+            hits = ctx.tracker.search(full, per_page=n, max_pages=1)
+            if not hits:
+                return "[ничего не найдено]"
+            return "\n".join(
+                f"- {h.get('key')}: {truncate(h.get('summary', ''), 120, '')} "
+                f"[{(h.get('status') or {}).get('display', '')}]" for h in hits[:n])
+        if name == "wiki_get_page":
+            url = str(args.get("url", "")).strip()
+            ctx.nav_log.append(f"wiki:{truncate(url, 60, '')}")
+            urls = extract_wiki_urls(url, ctx.acfg.wiki.allowed_hosts)
+            if not urls:
+                return f"[URL не с разрешённого хоста {ctx.acfg.wiki.allowed_hosts}]"
+            p = ctx.wiki.get_page(urls[0], ctx.acfg.limits.max_wiki_chars)
+            return f"[вики недоступна: {p['error']}]" if p["error"] else f"# {p['title'] or p['slug']}\n{p['content']}"
+    except Exception as e:  # noqa: BLE001
+        return f"[ошибка инструмента {name}: {type(e).__name__}: {e}]"
+    return f"[неизвестный инструмент {name}]"
+
+
+def dispatch_tool(ctx: RunContext, name: str, args: dict) -> str:
+    """Роутер: навигация (трекер/вики) — локально, остальное — в MCP кода 1С."""
+    if name in _NAV_TOOLS:
+        return _dispatch_navigation(ctx, name, args)
+    if ctx.onec and ctx.onec.available:
+        return ctx.onec.call(name, args, ctx.acfg.limits.max_tool_result_chars)
+    return f"[инструмент {name} недоступен]"
 
 
 # ---------- агентный цикл ----------
@@ -255,8 +424,7 @@ def run_analysis(ctx: RunContext, system_prompt: str, dossier: str,
             steps += 1
             log.info("  инструмент %d/%d: %s(%s)", steps, ctx.max_steps, tc.name,
                      truncate(str(tc.args), 200, ""))
-            result = (ctx.onec.call(tc.name, tc.args, ctx.acfg.limits.max_tool_result_chars)
-                      if ctx.onec else "[инструменты недоступны]")
+            result = dispatch_tool(ctx, tc.name, tc.args)
             messages.append(Msg.tool_result(tc.id, result))
 
     data = extract_json(resp.text)
@@ -332,6 +500,8 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
     started = time.monotonic()
     wf = ctx.acfg.bugs if workflow == "bugs" else ctx.acfg.ft
     log.info("=== %s: %s", key, truncate(issue.get("summary", ""), 100, ""))
+    ctx.vision_calls = 0      # потолок vision — на каждый анализ отдельно
+    ctx.nav_log = []          # след навигации — по текущей задаче
 
     # идемпотентность: подзадача уже есть -> только долечить теги
     existing = ctx.tracker.find_existing_ai_subtask(
@@ -369,9 +539,14 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
     if sources["skipped_images"]:
         images_note += "; пропущено: " + "; ".join(sources["skipped_images"])
 
-    tools = ctx.onec.tool_specs() if (ctx.onec and ctx.onec.available) else []
+    onec_specs = ctx.onec.tool_specs() if (ctx.onec and ctx.onec.available) else []
+    nav_specs = navigation_tool_specs(ctx.acfg.navigation)
+    tools = onec_specs + nav_specs
+    supports = ctx.analyst.supports_tools
     prompt_fn = bug_system_prompt if workflow == "bugs" else ft_system_prompt
-    system_prompt = prompt_fn(ctx.max_steps, tools_available=bool(tools) and ctx.analyst.supports_tools)
+    system_prompt = prompt_fn(ctx.max_steps,
+                              code_tools=bool(onec_specs) and supports,
+                              nav_tools=bool(nav_specs) and supports)
 
     result, raw_text, steps = run_analysis(ctx, system_prompt, dossier, images_for_analyst, tools)
     if result is None:
@@ -382,8 +557,9 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
     wiki_note_items = []
     for p in sources["wiki_pages"]:
         wiki_note_items.append(f"{p['url']}" + (f" [{p['error']}]" if p["error"] else ""))
-    code_note = ("инструменты кода недоступны" if not tools
+    code_note = ("инструменты кода недоступны" if not onec_specs
                  else f"вызовов инструментов: {steps}")
+    nav_note = "; ".join(ctx.nav_log) if ctx.nav_log else "переходов по связанным задачам не было"
     markdown = render_report(
         ctx.project_root / "templates",
         workflow,
@@ -391,13 +567,14 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
         parent_key=key,
         date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         models=(ctx.analyst.label() + (f" + vision {ctx.vision.label()}"
-                                       if (ctx.vision and images and not ctx.analyst.supports_vision) else "")),
+                                       if (ctx.vision and ctx.vision_calls > 0) else "")),
         dump_rev=dump_revision(ctx.acfg.onec.dump_path),
         disclaimer=ctx.acfg.report.disclaimer,
         sources={
             "images_note": images_note,
             "wiki_note": "; ".join(wiki_note_items) if wiki_note_items else "ссылок на вики не найдено",
             "code_note": code_note,
+            "nav_note": nav_note,
         },
     )
 

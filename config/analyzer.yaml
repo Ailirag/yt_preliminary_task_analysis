@@ -41,8 +41,17 @@ limits:
   max_comment_chars: 30000        # суммарное усечение комментариев
   max_wiki_chars: 40000           # усечение одной вики-страницы
   max_tool_result_chars: 20000    # усечение результата одного инструмента
+  max_vision_calls_per_issue: 20  # потолок обращений к GLM-4.6V на один анализ (осн. задача + связанные)
   throttle_between_issues_s: 10
   max_consecutive_errors: 3
+
+# Инструменты навигации аналитика (read-only): чтение других задач/поиск/вики прямо в агентском цикле.
+navigation:
+  enabled: true
+  tools: [get_issue, search_issues, get_wiki]
+  known_prefixes: []              # пусто -> только очередь queue (ONE); задаёт, какие ключи можно читать
+  max_issue_chars: 6000           # усечение текста одной связанной задачи
+  max_search_results: 10
 
 onec:
   enabled: true

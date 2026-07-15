@@ -48,6 +48,7 @@ class LimitsCfg(BaseModel):
     max_comment_chars: int = 30000
     max_wiki_chars: int = 40000
     max_tool_result_chars: int = 20000
+    max_vision_calls_per_issue: int = 20   # потолок обращений к vision на один анализ (осн.+связанные)
     throttle_between_issues_s: int = 10
     max_consecutive_errors: int = 3
 
@@ -103,6 +104,15 @@ class PathsCfg(BaseModel):
     journal_dir: str = "journal"
 
 
+class NavigationCfg(BaseModel):
+    """Read-only инструменты, которыми аналитик сам ходит по трекеру/вики в агентском цикле."""
+    enabled: bool = True
+    tools: list[str] = Field(default_factory=lambda: ["get_issue", "search_issues", "get_wiki"])
+    known_prefixes: list[str] = Field(default_factory=list)  # пусто -> [queue]; какие ключи можно читать
+    max_issue_chars: int = 6000        # усечение описания/комментариев связанной задачи
+    max_search_results: int = 10
+
+
 class AnalyzerCfg(BaseModel):
     queue: str
     component_name: str
@@ -115,6 +125,7 @@ class AnalyzerCfg(BaseModel):
     tracker: TrackerCfg
     report: ReportCfg
     paths: PathsCfg
+    navigation: NavigationCfg = Field(default_factory=NavigationCfg)
 
 
 # ---------- providers.yaml ----------
