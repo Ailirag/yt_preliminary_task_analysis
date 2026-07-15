@@ -49,7 +49,9 @@ limits:
 navigation:
   enabled: true
   tools: [get_issue, search_issues, get_wiki]
-  known_prefixes: []              # пусто -> только очередь queue (ONE); задаёт, какие ключи можно читать
+  # Очереди, задачи которых агент может открывать. Пусто -> только текущая (queue).
+  # Пример нескольких очередей: [ONE, BP, ZUP]. Голый номер в тексте агент трактует как текущую очередь.
+  allowed_queues: []
   max_issue_chars: 6000           # усечение текста одной связанной задачи
   max_search_results: 10
 

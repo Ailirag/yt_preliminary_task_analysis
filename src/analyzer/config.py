@@ -108,7 +108,7 @@ class NavigationCfg(BaseModel):
     """Read-only инструменты, которыми аналитик сам ходит по трекеру/вики в агентском цикле."""
     enabled: bool = True
     tools: list[str] = Field(default_factory=lambda: ["get_issue", "search_issues", "get_wiki"])
-    known_prefixes: list[str] = Field(default_factory=list)  # пусто -> [queue]; какие ключи можно читать
+    allowed_queues: list[str] = Field(default_factory=list)  # пусто -> [queue]; очереди, разрешённые агенту
     max_issue_chars: int = 6000        # усечение описания/комментариев связанной задачи
     max_search_results: int = 10
 

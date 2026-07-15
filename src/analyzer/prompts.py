@@ -64,13 +64,19 @@ CODE_TOOLS_GUIDANCE = """\
 
 NAV_TOOLS_GUIDANCE = """\
 Тебе доступны инструменты навигации по трекеру и вики (ТОЛЬКО чтение):
-- tracker_get_issue(key) — прочитать другую задачу по ключу; её текст и описания её скриншотов
-  подготавливаются автоматически, тебе вернётся готовый текст;
+- tracker_get_issue(key) — прочитать другую задачу по ПОЛНОМУ ключу (напр. {current_queue}-1915);
+  её текст и описания её скриншотов подготавливаются автоматически — вернётся готовый текст;
 - tracker_search_issues(query) — найти задачи в очереди (условие БЕЗ 'Queue:', напр. Summary: "ввоз");
 - wiki_get_page(url) — прочитать страницу вики.
-Если задача ссылается на другую («в рамках задачи 1915», ключ вида ONE-1915) и это существенно
-для понимания причины — прочитай её. Не ходи по ссылкам без необходимости. Задача, найденная по
-голому номеру, может оказаться нерелевантной — при сомнении отметь это в missing_info."""
+
+Разрешённые для чтения очереди: {allowed}. Текущая задача — в очереди {current_queue}.
+Как определить, о какой задаче речь в тексте:
+- номер БЕЗ префикса («в рамках задачи 1915») относится к ТЕКУЩЕЙ очереди -> ключ {current_queue}-1915;
+- ключ С префиксом очереди (напр. BP-123) — задача другой очереди, передавай как есть (сработает,
+  только если очередь в списке разрешённых);
+- задачи очередей вне списка читать нельзя.
+Открыв задачу, сверь её тему с контекстом упоминания: если не совпало (возможно, номер был не тот) —
+отметь это в missing_info и не опирайся на неё. Не ходи по ссылкам без необходимости."""
 
 TOOLS_BUDGET_NOTE = ("Все инструменты делят общий бюджет {max_steps} обращений. Не делай лишних "
                      "вызовов; когда данных достаточно — верни финальный JSON без вызова инструментов.")
@@ -79,38 +85,43 @@ NO_TOOLS_NOTE = ("Инструменты в этом прогоне недост
                  "отражай ограничения в missing_info/notes.")
 
 
-def _tools_section(parts: list[str], max_steps: int, code_tools: bool, nav_tools: bool) -> None:
+def _tools_section(parts: list[str], max_steps: int, code_tools: bool, nav_tools: bool,
+                   current_queue: str, allowed_queues: list[str] | None) -> None:
     if code_tools:
         parts.append(CODE_TOOLS_GUIDANCE)
     if nav_tools:
-        parts.append(NAV_TOOLS_GUIDANCE)
+        cq = current_queue or "текущей очереди"
+        allowed = ", ".join(allowed_queues) if allowed_queues else cq
+        parts.append(NAV_TOOLS_GUIDANCE.format(current_queue=cq, allowed=allowed))
     if code_tools or nav_tools:
         parts.append(TOOLS_BUDGET_NOTE.format(max_steps=max_steps))
     else:
         parts.append(NO_TOOLS_NOTE)
 
 
-def bug_system_prompt(max_steps: int, code_tools: bool, nav_tools: bool) -> str:
+def bug_system_prompt(max_steps: int, code_tools: bool, nav_tools: bool,
+                      current_queue: str = "", allowed_queues: list[str] | None = None) -> str:
     parts = [
         "Ты — ведущий аналитик-разработчик 1С:Предприятие. Твоя задача — предварительный анализ "
         "ошибки из трекера: понять проблему, найти вероятную причину в коде конфигурации, оценить "
         "сложность исправления и подготовить черновик решения. Отвечай на русском языке.",
         INJECTION_GUARD,
     ]
-    _tools_section(parts, max_steps, code_tools, nav_tools)
+    _tools_section(parts, max_steps, code_tools, nav_tools, current_queue, allowed_queues)
     parts.append(COMPLEXITY_CRITERIA)
     parts.append(ANALYSIS_JSON_SCHEMA_TEXT)
     return "\n\n".join(parts)
 
 
-def ft_system_prompt(max_steps: int, code_tools: bool, nav_tools: bool) -> str:
+def ft_system_prompt(max_steps: int, code_tools: bool, nav_tools: bool,
+                     current_queue: str = "", allowed_queues: list[str] | None = None) -> str:
     parts = [
         "Ты — ведущий аналитик-разработчик 1С:Предприятие. Твоя задача — анализ готового "
         "функционального требования (ФТ): оценить его полноту, спроецировать на конфигурацию "
         "и подготовить черновик плана реализации. Отвечай на русском языке.",
         INJECTION_GUARD,
     ]
-    _tools_section(parts, max_steps, code_tools, nav_tools)
+    _tools_section(parts, max_steps, code_tools, nav_tools, current_queue, allowed_queues)
     parts.append(COMPLEXITY_CRITERIA)
     parts.append(FT_JSON_SCHEMA_TEXT)
     return "\n\n".join(parts)

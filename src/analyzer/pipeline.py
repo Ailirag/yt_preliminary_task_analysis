@@ -243,16 +243,21 @@ def analyze_images(ctx: RunContext, images: list[ImagePart], source: str = "за
 def fetch_issue_context(ctx: RunContext, key: str) -> str:
     """Текст связанной задачи для аналитика: описание, комментарии, связи и описания её
     скриншотов (vision прогоняется здесь, т.к. аналитик текстовый). Кэшируется на прогон."""
-    key = key.strip().upper()
+    nav = ctx.acfg.navigation
+    allowed = [q.upper() for q in (nav.allowed_queues or [ctx.acfg.queue])]
+    key = key.strip().lstrip("#№ ").strip().upper()
+    # очередь угадывает модель, не инструмент: голый номер -> просим полный ключ
+    if key.isdigit():
+        return (f"[передан голый номер «{key}» без префикса очереди. Укажи ПОЛНЫЙ ключ: номер без "
+                f"префикса относится к текущей очереди {ctx.acfg.queue} -> повтори вызов с ключом "
+                f"{ctx.acfg.queue}-{int(key)}. Ключ другой очереди указывай с её префиксом.]")
     cached = ctx.related_cache.get(key)
     if cached is not None:
         return cached
-    nav = ctx.acfg.navigation
-    prefixes = [p.upper() for p in (nav.known_prefixes or [ctx.acfg.queue])]
     prefix = key.split("-", 1)[0] if "-" in key else ""
-    if prefix not in prefixes:
-        return (f"[доступ к задаче {key} не разрешён: читать можно только задачи с префиксами "
-                f"{prefixes}. Задачи других очередей недоступны.]")
+    if prefix not in allowed:
+        return (f"[доступ к задаче {key} не разрешён: читать можно только очереди {allowed}. "
+                f"Задачи других очередей недоступны.]")
     try:
         issue = ctx.tracker.get_issue(key)
     except Exception as e:  # noqa: BLE001
@@ -543,10 +548,14 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
     nav_specs = navigation_tool_specs(ctx.acfg.navigation)
     tools = onec_specs + nav_specs
     supports = ctx.analyst.supports_tools
+    current_queue = key.split("-", 1)[0] if "-" in key else ctx.acfg.queue
+    allowed_queues = ctx.acfg.navigation.allowed_queues or [ctx.acfg.queue]
     prompt_fn = bug_system_prompt if workflow == "bugs" else ft_system_prompt
     system_prompt = prompt_fn(ctx.max_steps,
                               code_tools=bool(onec_specs) and supports,
-                              nav_tools=bool(nav_specs) and supports)
+                              nav_tools=bool(nav_specs) and supports,
+                              current_queue=current_queue,
+                              allowed_queues=allowed_queues)
 
     result, raw_text, steps = run_analysis(ctx, system_prompt, dossier, images_for_analyst, tools)
     if result is None:
