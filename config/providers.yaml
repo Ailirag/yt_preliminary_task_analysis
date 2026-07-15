@@ -1,9 +1,8 @@
 # ===== LLM-провайдеры и роли моделей =====
 # Роль указывается как "<провайдер>/<модель>". Переопределяется CLI: --analyst, --vision.
 roles:
-  analyst: zai/glm-5.2          # основной анализ: подписка GLM Coding Plan (текст + инструменты)
-  vision: zai-payg/glm-4.6v     # разбор скриншотов; ТРЕБУЕТ обычный тариф (подписка картинки не умеет).
-                                # Если не нужен / нет баланса обычного тарифа -> поставьте: none
+  analyst: zai/glm-5.2          # основной анализ (текст + инструменты)
+  vision: zai/glm-4.6v          # разбор скриншотов из задач; none — выключить
 
 limits:
   max_output_tokens: 8000
@@ -11,26 +10,16 @@ limits:
   retries: 3
 
 providers:
-  # --- z.ai ПОДПИСКА (GLM Coding Plan): GLM-5.2 / GLM-5-Turbo / GLM-4.7; без vision ---
+  # --- z.ai (обычный тариф, оплата за токены): GLM-5.2 для анализа, GLM-4.6V для vision ---
   zai:
     kind: openai-compat
-    base_url: "https://api.z.ai/api/coding/paas/v4"   # ПОДПИСОЧНЫЙ эндпоинт (Coding Plan)
-    # base_url: "https://api.z.ai/api/paas/v4"         # обычный (pay-as-you-go), если подписки нет
+    base_url: "https://api.z.ai/api/paas/v4"           # обычный эндпоинт (pay-as-you-go) — активен
+    # base_url: "https://api.z.ai/api/coding/paas/v4"   # подписочный (GLM Coding Plan) — без vision
     api_key_env: ZAI_API_KEY
     models:
       glm-5.2:     { tools: true, vision: false }
+      glm-4.6v:    { tools: true, vision: true }
       glm-5-turbo: { tools: true, vision: false }
-      glm-4.7:     { tools: true, vision: false }
-
-  # --- z.ai ОБЫЧНЫЙ тариф (оплата за токены): нужен для vision (GLM-4.6V) ---
-  # Тот же ключ ZAI_API_KEY, другой эндпоинт (списывает с баланса, а не из подписки).
-  zai-payg:
-    kind: openai-compat
-    base_url: "https://api.z.ai/api/paas/v4"
-    api_key_env: ZAI_API_KEY
-    models:
-      glm-4.6v: { tools: true, vision: true }
-      glm-5.2:  { tools: true, vision: false }
 
   yandex:
     kind: openai-compat
