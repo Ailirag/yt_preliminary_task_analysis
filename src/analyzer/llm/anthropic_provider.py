@@ -19,6 +19,7 @@ class AnthropicProvider(Provider):
         model: str = "claude-opus-4-8",
         supports_vision: bool = True,
         supports_tools: bool = True,
+        force_first_tool: bool = False,
         max_output_tokens: int = 8000,
         timeout_s: int = 300,
         retries: int = 3,
@@ -27,6 +28,7 @@ class AnthropicProvider(Provider):
         self.model = model
         self.supports_vision = supports_vision
         self.supports_tools = supports_tools
+        self.force_first_tool = force_first_tool
         self.max_output_tokens = max_output_tokens
         self._client = anthropic.Anthropic(api_key=api_key, timeout=float(timeout_s), max_retries=retries)
 
@@ -83,7 +85,8 @@ class AnthropicProvider(Provider):
 
     # ---------- вызов ----------
 
-    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None) -> LLMResponse:
+    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
+             tool_choice: str | None = None) -> LLMResponse:
         system_text, api_messages = self._translate(messages)
         kwargs: dict = {
             "model": self.model,
@@ -99,6 +102,8 @@ class AnthropicProvider(Provider):
                  "input_schema": t.schema or {"type": "object", "properties": {}}}
                 for t in tools
             ]
+            if tool_choice == "required":
+                kwargs["tool_choice"] = {"type": "any"}   # Anthropic: заставить вызвать инструмент
         resp = self._client.messages.create(**kwargs)
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []

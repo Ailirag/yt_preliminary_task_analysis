@@ -23,6 +23,7 @@ class OpenAICompatProvider(Provider):
         model: str,
         supports_vision: bool,
         supports_tools: bool,
+        force_first_tool: bool = False,
         max_output_tokens: int = 8000,
         timeout_s: int = 300,
         retries: int = 3,
@@ -32,6 +33,7 @@ class OpenAICompatProvider(Provider):
         self.name = name
         self.supports_vision = supports_vision
         self.supports_tools = supports_tools
+        self.force_first_tool = force_first_tool
         self.max_output_tokens = max_output_tokens
         self.model = model
         # Yandex: модель адресуется URI вида gpt://<folder_id>/<model>
@@ -109,7 +111,8 @@ class OpenAICompatProvider(Provider):
 
     # ---------- вызов ----------
 
-    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None) -> LLMResponse:
+    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
+             tool_choice: str | None = None) -> LLMResponse:
         kwargs: dict = {
             "model": self._wire_model,
             "messages": self._to_openai_messages(messages),
@@ -117,6 +120,8 @@ class OpenAICompatProvider(Provider):
         }
         if tools and self.supports_tools:
             kwargs["tools"] = self._to_openai_tools(tools)
+            if tool_choice:
+                kwargs["tool_choice"] = tool_choice
         resp = self._client.chat.completions.create(**kwargs)
         choice = resp.choices[0]
         text = choice.message.content or ""

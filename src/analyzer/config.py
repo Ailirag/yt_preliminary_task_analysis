@@ -133,10 +133,11 @@ class AnalyzerCfg(BaseModel):
 class ModelCaps(BaseModel):
     tools: bool = True
     vision: bool = False
+    force_first_tool: bool = False   # tool_choice=required на первом ходу (для моделей, что ленятся звать tools)
 
 
 class ProviderCfg(BaseModel):
-    kind: Literal["openai-compat", "anthropic"]
+    kind: Literal["openai-compat", "anthropic", "openai-responses"]
     base_url: str | None = None
     api_key_env: str
     model_uri_template: str | None = None

@@ -20,6 +20,8 @@ providers:
       glm-5.2:     { tools: true, vision: false }
       glm-4.6v:    { tools: true, vision: true }
       glm-5-turbo: { tools: true, vision: false }
+      glm-5:       { tools: true, vision: false }
+      glm-4.7:     { tools: true, vision: false }
 
   yandex:
     kind: openai-compat
@@ -31,6 +33,27 @@ providers:
     models:
       yandexgpt:        { tools: true, vision: false }
       yandexgpt/latest: { tools: true, vision: false }
+      # открытые модели Yandex AI Studio (folder — из YANDEX_FOLDER_ID; ID из консоли)
+      "qwen3-235b-a22b-fp8/latest": { tools: true, vision: false }
+      "qwen3.6-35b-a3b/latest":     { tools: true, vision: false }
+      "deepseek-v4-flash/latest":   { tools: true, vision: false }
+      "aliceai-llm/latest":         { tools: true, vision: false }
+      "yandexgpt-5.1/latest":       { tools: true, vision: false }
+
+  # Yandex через Responses API (ai.api.cloud.yandex.net): здесь модели РЕАЛЬНО вызывают
+  # инструменты (в отличие от chat/completions). Для агентного анализа у Яндекса — этот провайдер.
+  yandex-responses:
+    kind: openai-responses
+    base_url: "https://ai.api.cloud.yandex.net/v1"
+    api_key_env: YANDEX_API_KEY
+    model_uri_template: "gpt://{folder_id}/{model}"
+    folder_id_env: YANDEX_FOLDER_ID
+    models:
+      "yandexgpt-5.1/latest":       { tools: true, vision: false }
+      "aliceai-llm/latest":         { tools: true, vision: false }
+      "deepseek-v4-flash/latest":   { tools: true, vision: false }
+      "qwen3-235b-a22b-fp8/latest": { tools: true, vision: false }
+      "qwen3.6-35b-a3b/latest":     { tools: true, vision: false }
 
   claude:
     kind: anthropic

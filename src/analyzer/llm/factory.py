@@ -6,6 +6,7 @@ from ..config import ProvidersCfg
 from .anthropic_provider import AnthropicProvider
 from .base import Provider
 from .openai_compat import OpenAICompatProvider
+from .responses_provider import OpenAIResponsesProvider
 
 
 def build_provider(pcfgs: ProvidersCfg, role_spec: str) -> Provider:
@@ -22,20 +23,23 @@ def build_provider(pcfgs: ProvidersCfg, role_spec: str) -> Provider:
             model=model,
             supports_vision=caps.vision,
             supports_tools=caps.tools,
+            force_first_tool=caps.force_first_tool,
             max_output_tokens=limits.max_output_tokens,
             timeout_s=limits.request_timeout_s,
             retries=limits.retries,
         )
-    if pcfg.kind == "openai-compat":
+    if pcfg.kind in ("openai-compat", "openai-responses"):
         if not pcfg.base_url:
             raise RuntimeError(f"Провайдер {pname!r}: не задан base_url")
-        return OpenAICompatProvider(
+        cls = OpenAIResponsesProvider if pcfg.kind == "openai-responses" else OpenAICompatProvider
+        return cls(
             name=pname,
             base_url=pcfg.base_url,
             api_key=api_key,
             model=model,
             supports_vision=caps.vision,
             supports_tools=caps.tools,
+            force_first_tool=caps.force_first_tool,
             max_output_tokens=limits.max_output_tokens,
             timeout_s=limits.request_timeout_s,
             retries=limits.retries,

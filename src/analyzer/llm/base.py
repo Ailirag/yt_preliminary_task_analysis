@@ -75,9 +75,11 @@ class Provider(ABC):
     model: str = ""
     supports_vision: bool = False
     supports_tools: bool = True
+    force_first_tool: bool = False   # принудительный tool_choice=required на первом ходу
 
     @abstractmethod
-    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None) -> LLMResponse:
+    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
+             tool_choice: str | None = None) -> LLMResponse:
         ...
 
     def label(self) -> str:

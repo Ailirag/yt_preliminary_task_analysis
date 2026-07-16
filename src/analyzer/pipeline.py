@@ -411,8 +411,14 @@ def run_analysis(ctx: RunContext, system_prompt: str, dossier: str,
     steps = 0
     resp = None
     use_tools = bool(tools) and ctx.analyst.supports_tools
+    first_turn = True
     while True:
-        resp = ctx.analyst.chat(messages, tools=tools if use_tools else None)
+        # для «ленивых» моделей (force_first_tool) заставляем сделать первый заход в код,
+        # дальше — auto, чтобы модель могла завершить финальным JSON
+        tchoice = "required" if (first_turn and use_tools
+                                 and getattr(ctx.analyst, "force_first_tool", False)) else None
+        resp = ctx.analyst.chat(messages, tools=tools if use_tools else None, tool_choice=tchoice)
+        first_turn = False
         ctx.add_usage("analyst", resp.usage)
         if not resp.tool_calls:
             break
