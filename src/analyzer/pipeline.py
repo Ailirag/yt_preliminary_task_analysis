@@ -225,6 +225,7 @@ def analyze_images(ctx: RunContext, images: list[ImagePart], source: str = "за
             descriptions.append(f"[лимит vision-вызовов ({cap}) исчерпан — скриншот {i} не разобран]")
             continue
         ctx.vision_calls += 1
+        log.info("    vision %d/%d (%s)…", i, len(images), source)
         try:
             resp = ctx.vision.chat([
                 Msg.system(VISION_PROMPT),
@@ -500,11 +501,12 @@ def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
 
 # ---------- обработка одной задачи ----------
 
-def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
+def process_issue(ctx: RunContext, issue: dict, workflow: str,
+                  idx: int = 1, total: int = 1) -> dict:
     key = issue["key"]
     started = time.monotonic()
     wf = ctx.acfg.bugs if workflow == "bugs" else ctx.acfg.ft
-    log.info("=== %s: %s", key, truncate(issue.get("summary", ""), 100, ""))
+    log.info("=== [%d/%d] %s: %s", idx, total, key, truncate(issue.get("summary", ""), 100, ""))
     ctx.vision_calls = 0      # потолок vision — на каждый анализ отдельно
     ctx.nav_log = []          # след навигации — по текущей задаче
 
@@ -525,6 +527,8 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
             return {"issue": key, "action": "skipped-no-doclink"}
 
     dossier, images, sources = build_dossier(ctx, issue, workflow)
+    log.info("  досье: комментариев %d, картинок %d, вики-страниц %d",
+             sources["comments"], sources["images_total"], len(sources["wiki_pages"]))
 
     # vision: сайдкар только если аналитик сам не мультимодален
     images_for_analyst: list[ImagePart] = []
@@ -534,6 +538,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
             images_for_analyst = images
             images_note = f"проанализировано напрямую моделью-аналитиком: {len(images)}"
         elif ctx.vision is not None:
+            log.info("  разбор скриншотов vision-моделью %s: %d шт.", ctx.vision.label(), len(images))
             descriptions = analyze_images(ctx, images)
             dossier += "\n\n## Скриншоты (описания vision-модели)\n"
             for i, d in enumerate(descriptions, 1):
@@ -557,6 +562,13 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str) -> dict:
                               current_queue=current_queue,
                               allowed_queues=allowed_queues)
 
+    kinds = []
+    if onec_specs and supports:
+        kinds.append(f"код×{len(onec_specs)}")
+    if nav_specs and supports:
+        kinds.append(f"навигация×{len(nav_specs)}")
+    log.info("  анализ моделью %s (%s)", ctx.analyst.label(),
+             "инструменты: " + ", ".join(kinds) if kinds else "без инструментов")
     result, raw_text, steps = run_analysis(ctx, system_prompt, dossier, images_for_analyst, tools)
     if result is None:
         (ctx.journal.dir / "dry-run" / f"{key}.raw.txt").write_text(raw_text or "", encoding="utf-8")
@@ -618,7 +630,7 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
     for i, issue in enumerate(issues):
         before = ctx.usage_snapshot()
         try:
-            r = process_issue(ctx, issue, workflow)
+            r = process_issue(ctx, issue, workflow, idx=i + 1, total=len(issues))
             consecutive_errors = consecutive_errors + 1 if r.get("action") == "error" else 0
         except Exception as e:  # noqa: BLE001
             log.exception("Ошибка обработки %s", issue.get("key"))
@@ -629,6 +641,8 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
         r["usage"] = _usage_delta(before, ctx.usage)  # пер-задачный расход по ролям
         ctx.journal.run_event(**r)
         results.append(r)
+        log.info("[%d/%d] %s -> %s%s (%.0fс)", i + 1, len(issues), r.get("issue"), r.get("action"),
+                 f", подзадача {r['subtask']}" if r.get("subtask") else "", r.get("duration_s") or 0.0)
         ctx.tracker.finish_iteration()  # полный доступ к созданным — только на время итерации
         if consecutive_errors >= ctx.acfg.limits.max_consecutive_errors:
             log.error("Аварийная остановка: %d ошибок подряд", consecutive_errors)
