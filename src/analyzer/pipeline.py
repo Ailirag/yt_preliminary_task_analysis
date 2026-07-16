@@ -510,6 +510,24 @@ def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
 
 # ---------- обработка одной задачи ----------
 
+def _model_prices(pcfgs, provider) -> tuple[float | None, float | None]:
+    """Тарифы (₽/1000 вход, ₽/1000 выход) модели провайдера из providers.yaml; (None,None) если нет."""
+    if provider is None:
+        return None, None
+    try:
+        _, _, _, caps = pcfgs.resolve(f"{provider.name}/{provider.model}")
+        return caps.price_in, caps.price_out
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def _rub_cost(tin: int, tout: int, pin: float | None, pout: float | None) -> float | None:
+    """Ориентировочная стоимость по тарифу вход/выход (верхняя граница — без учёта кеша/tools)."""
+    if pin is None or pout is None:
+        return None
+    return round(tin / 1000 * pin + tout / 1000 * pout, 2)
+
+
 def process_issue(ctx: RunContext, issue: dict, workflow: str,
                   idx: int = 1, total: int = 1) -> dict:
     key = issue["key"]
@@ -607,6 +625,12 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         "total_in": udelta["analyst"]["input_tokens"] + udelta["vision"]["input_tokens"],
         "total_out": udelta["analyst"]["output_tokens"] + udelta["vision"]["output_tokens"],
     }
+    a_pin, a_pout = _model_prices(ctx.pcfgs, ctx.analyst)
+    v_pin, v_pout = _model_prices(ctx.pcfgs, ctx.vision)
+    stats["analyst_cost"] = _rub_cost(stats["analyst_in"], stats["analyst_out"], a_pin, a_pout)
+    stats["vision_cost"] = _rub_cost(stats["vision_in"], stats["vision_out"], v_pin, v_pout)
+    _costs = [c for c in (stats["analyst_cost"], stats["vision_cost"]) if c is not None]
+    stats["total_cost"] = round(sum(_costs), 2) if _costs else None
 
     markdown = render_report(
         ctx.project_root / "templates",
@@ -636,6 +660,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         "complexity": result.complexity,
         "trust": verdict.level,
         "confidence": verdict.score,
+        "cost_rub": stats["total_cost"],
         "tool_steps": steps,
         "duration_s": round(time.monotonic() - started, 1),
     }

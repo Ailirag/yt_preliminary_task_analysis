@@ -71,6 +71,7 @@
 ## Метрики анализа (авто)
 
 - **Токены:** analyst << stats.analyst_in >>→<< stats.analyst_out >> (обращений к модели: << stats.analyst_calls >>); vision << stats.vision_in >>→<< stats.vision_out >> (<< stats.vision_calls >>); **ИТОГО** << stats.total_in >>→<< stats.total_out >>
-- **Обращений к инструментам (код/навигация):** << stats.tool_steps >>
+<% if stats.total_cost is not none %>- **Ориентировочная стоимость (₽, вкл. НДС; по вход/выход — верхняя граница):** analyst ≈ << stats.analyst_cost if stats.analyst_cost is not none else 'н/д' >>; vision ≈ << stats.vision_cost if stats.vision_cost is not none else 'н/д' >>; **ИТОГО ≈ << stats.total_cost >> ₽**
+<% endif %>- **Обращений к инструментам (код/навигация):** << stats.tool_steps >>
 - **Время анализа:** << stats.duration_s >> с
 <% endif %>
