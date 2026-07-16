@@ -38,6 +38,7 @@ def render_report(
     disclaimer: str,
     sources: dict,
     verdict=None,
+    stats=None,
 ) -> str:
     template_name = "bug-report.md" if workflow == "bugs" else "ft-report.md"
     template = _env(templates_dir).get_template(template_name)
@@ -50,4 +51,5 @@ def render_report(
         disclaimer=disclaimer,
         sources=sources,
         verdict=verdict,
+        stats=stats,
     )

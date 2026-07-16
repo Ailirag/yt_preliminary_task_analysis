@@ -518,6 +518,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
     log.info("=== [%d/%d] %s: %s", idx, total, key, truncate(issue.get("summary", ""), 100, ""))
     ctx.vision_calls = 0      # потолок vision — на каждый анализ отдельно
     ctx.nav_log = []          # след навигации — по текущей задаче
+    usage_before = ctx.usage_snapshot()  # база для пер-задачных метрик в отчёте
 
     # идемпотентность: подзадача уже есть -> только долечить теги
     existing = ctx.tracker.find_existing_ai_subtask(
@@ -595,6 +596,18 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
                            hit_budget=steps >= ctx.max_steps, json_retried=json_retried)
     log.info("  вердикт доверия: %s (%d/100)", verdict.level, verdict.score)
 
+    udelta = _usage_delta(usage_before, ctx.usage_snapshot())
+    stats = {
+        "analyst_in": udelta["analyst"]["input_tokens"], "analyst_out": udelta["analyst"]["output_tokens"],
+        "analyst_calls": udelta["analyst"]["calls"],
+        "vision_in": udelta["vision"]["input_tokens"], "vision_out": udelta["vision"]["output_tokens"],
+        "vision_calls": udelta["vision"]["calls"],
+        "tool_steps": steps,
+        "duration_s": round(time.monotonic() - started, 1),
+        "total_in": udelta["analyst"]["input_tokens"] + udelta["vision"]["input_tokens"],
+        "total_out": udelta["analyst"]["output_tokens"] + udelta["vision"]["output_tokens"],
+    }
+
     markdown = render_report(
         ctx.project_root / "templates",
         workflow,
@@ -606,6 +619,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         dump_rev=dump_revision(ctx.acfg.onec.dump_path),
         disclaimer=ctx.acfg.report.disclaimer,
         verdict=verdict,
+        stats=stats,
         sources={
             "images_note": images_note,
             "wiki_note": "; ".join(wiki_note_items) if wiki_note_items else "ссылок на вики не найдено",

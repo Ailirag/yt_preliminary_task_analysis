@@ -67,3 +67,10 @@
 <% for reason in verdict.reasons %>- << reason >>
 <% endfor %>
 <% endif %>
+<% if stats %>
+## Метрики анализа (авто)
+
+- **Токены:** analyst << stats.analyst_in >>→<< stats.analyst_out >> (обращений к модели: << stats.analyst_calls >>); vision << stats.vision_in >>→<< stats.vision_out >> (<< stats.vision_calls >>); **ИТОГО** << stats.total_in >>→<< stats.total_out >>
+- **Обращений к инструментам (код/навигация):** << stats.tool_steps >>
+- **Время анализа:** << stats.duration_s >> с
+<% endif %>
