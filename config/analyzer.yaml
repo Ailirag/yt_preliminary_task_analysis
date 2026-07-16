@@ -37,7 +37,7 @@ limits:
   max_images_per_issue: 8
   max_image_mb: 15
   max_wiki_pages_per_issue: 5
-  max_tool_steps: 15              # бюджет агентного цикла (CLI --max-steps)
+  max_tool_steps: 60              # бюджет агентного цикла (CLI --max-steps)
   max_comment_chars: 30000        # суммарное усечение комментариев
   max_wiki_chars: 40000           # усечение одной вики-страницы
   max_tool_result_chars: 20000    # усечение результата одного инструмента
