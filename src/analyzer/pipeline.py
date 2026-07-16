@@ -14,6 +14,7 @@ from .journal import Journal, now_iso
 from .llm import ImagePart, Msg, Provider, ToolSpec, extract_json
 from .llm.base import truncate
 from .models import AnalysisResult, normalize_analysis
+from .verdict import score_result
 from .onec import OnecMCP
 from .prompts import VISION_PROMPT, bug_system_prompt, ft_system_prompt
 from .report import render_report
@@ -440,20 +441,22 @@ def run_analysis(ctx: RunContext, system_prompt: str, dossier: str,
             messages.append(Msg.tool_result(tc.id, result))
 
     data = extract_json(resp.text)
+    json_retried = False
     if data is None:
         log.warning("Ответ не распознан как JSON, повторный запрос")
+        json_retried = True
         messages.append(Msg.assistant(resp.text))
         messages.append(Msg.user("Ответ не распознан. Верни СТРОГО один JSON-объект по схеме, без текста вокруг."))
         resp = ctx.analyst.chat(messages)
         ctx.add_usage("analyst", resp.usage)
         data = extract_json(resp.text)
     if data is None:
-        return None, resp.text, steps
+        return None, resp.text, steps, json_retried
     try:
-        return normalize_analysis(data), resp.text, steps
+        return normalize_analysis(data), resp.text, steps, json_retried
     except Exception as e:  # noqa: BLE001
         log.warning("Не удалось нормализовать результат: %s", e)
-        return None, resp.text, steps
+        return None, resp.text, steps, json_retried
 
 
 # ---------- запись ----------
@@ -575,7 +578,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         kinds.append(f"навигация×{len(nav_specs)}")
     log.info("  анализ моделью %s (%s)", ctx.analyst.label(),
              "инструменты: " + ", ".join(kinds) if kinds else "без инструментов")
-    result, raw_text, steps = run_analysis(ctx, system_prompt, dossier, images_for_analyst, tools)
+    result, raw_text, steps, json_retried = run_analysis(ctx, system_prompt, dossier, images_for_analyst, tools)
     if result is None:
         (ctx.journal.dir / "dry-run" / f"{key}.raw.txt").write_text(raw_text or "", encoding="utf-8")
         return {"issue": key, "action": "error",
@@ -587,6 +590,11 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
     code_note = ("инструменты кода недоступны" if not onec_specs
                  else f"вызовов инструментов: {steps}")
     nav_note = "; ".join(ctx.nav_log) if ctx.nav_log else "переходов по связанным задачам не было"
+
+    verdict = score_result(result, tool_steps=steps, code_available=bool(onec_specs),
+                           hit_budget=steps >= ctx.max_steps, json_retried=json_retried)
+    log.info("  вердикт доверия: %s (%d/100)", verdict.level, verdict.score)
+
     markdown = render_report(
         ctx.project_root / "templates",
         workflow,
@@ -597,6 +605,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
                                        if (ctx.vision and ctx.vision_calls > 0) else "")),
         dump_rev=dump_revision(ctx.acfg.onec.dump_path),
         disclaimer=ctx.acfg.report.disclaimer,
+        verdict=verdict,
         sources={
             "images_note": images_note,
             "wiki_note": "; ".join(wiki_note_items) if wiki_note_items else "ссылок на вики не найдено",
@@ -611,6 +620,8 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         "action": action,
         "subtask": subtask,
         "complexity": result.complexity,
+        "trust": verdict.level,
+        "confidence": verdict.score,
         "tool_steps": steps,
         "duration_s": round(time.monotonic() - started, 1),
     }

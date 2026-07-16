@@ -1,5 +1,9 @@
 > << disclaimer >>
 >
+<% if verdict %>
+> **Вердикт доверия (авто): << verdict.level >> — << verdict.score >>/100**
+>
+<% endif %>
 > Родительская задача: **<< parent_key >>** | Дата анализа: << date >> | Модели: << models >> | Ревизия конфигурации: << dump_rev >>
 
 ## 1. Резюме
@@ -49,4 +53,11 @@
 ## Примечания
 
 << r.notes >>
+<% endif %>
+<% if verdict and verdict.reasons %>
+## Оценка доверия (как считалась)
+
+**<< verdict.level >> — << verdict.score >>/100.** Факторы:
+<% for reason in verdict.reasons %>- << reason >>
+<% endfor %>
 <% endif %>

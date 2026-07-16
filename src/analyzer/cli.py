@@ -108,6 +108,8 @@ def _print_summary(results: list[dict], ctx) -> None:
         line = f"  {r.get('issue')}: {r.get('action')}"
         if r.get("complexity"):
             line += f" | сложность: {r['complexity']}"
+        if r.get("trust"):
+            line += f" | доверие: {r['trust']} ({r.get('confidence')}/100)"
         if r.get("subtask"):
             line += f" | подзадача: {r['subtask']}"
         if r.get("tool_steps") is not None:
