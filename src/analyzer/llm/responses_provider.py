@@ -135,8 +135,11 @@ class OpenAIResponsesProvider(Provider):
         usage = {}
         u = getattr(resp, "usage", None)
         if u:
+            det = getattr(u, "input_tokens_details", None)
             usage = {"input_tokens": getattr(u, "input_tokens", 0) or 0,
-                     "output_tokens": getattr(u, "output_tokens", 0) or 0}
+                     "output_tokens": getattr(u, "output_tokens", 0) or 0,
+                     "cached_tokens": (getattr(det, "cached_tokens", 0) or 0) if det else 0,
+                     "tool_tokens": (getattr(det, "tool_tokens", 0) or 0) if det else 0}
         return LLMResponse(text="\n".join(t for t in text_parts if t),
                            tool_calls=tool_calls, usage=usage,
                            stop_reason=getattr(resp, "status", None))

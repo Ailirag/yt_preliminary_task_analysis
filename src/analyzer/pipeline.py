@@ -42,17 +42,18 @@ class RunContext:
     project_root: Path
     # расход токенов раздельно по ролям моделей (analyst — GLM-5.2, vision — GLM-4.6V)
     usage: dict = field(default_factory=lambda: {
-        "analyst": {"input_tokens": 0, "output_tokens": 0, "calls": 0},
-        "vision": {"input_tokens": 0, "output_tokens": 0, "calls": 0},
+        "analyst": {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tool_tokens": 0, "calls": 0},
+        "vision": {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tool_tokens": 0, "calls": 0},
     })
     vision_calls: int = 0                                 # обращений к vision в рамках текущего анализа
     nav_log: list = field(default_factory=list)           # след навигации (для отчёта/журнала)
     related_cache: dict = field(default_factory=dict)     # ключ задачи -> готовый текст (кэш на прогон)
 
     def add_usage(self, role: str, usage: dict) -> None:
-        bucket = self.usage.setdefault(role, {"input_tokens": 0, "output_tokens": 0, "calls": 0})
-        bucket["input_tokens"] += int(usage.get("input_tokens") or 0)
-        bucket["output_tokens"] += int(usage.get("output_tokens") or 0)
+        bucket = self.usage.setdefault(
+            role, {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tool_tokens": 0, "calls": 0})
+        for k in ("input_tokens", "output_tokens", "cached_tokens", "tool_tokens"):
+            bucket[k] = bucket.get(k, 0) + int(usage.get(k) or 0)
         bucket["calls"] += 1
 
     def usage_snapshot(self) -> dict:
@@ -510,22 +511,26 @@ def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
 
 # ---------- обработка одной задачи ----------
 
-def _model_prices(pcfgs, provider) -> tuple[float | None, float | None]:
-    """Тарифы (₽/1000 вход, ₽/1000 выход) модели провайдера из providers.yaml; (None,None) если нет."""
+def _model_prices(pcfgs, provider) -> tuple:
+    """Тарифы (вход, выход, кеш, инструменты) ₽/1000 модели провайдера; None-ы если цена не задана."""
     if provider is None:
-        return None, None
+        return (None, None, None, None)
     try:
         _, _, _, caps = pcfgs.resolve(f"{provider.name}/{provider.model}")
-        return caps.price_in, caps.price_out
+        return (caps.price_in, caps.price_out, caps.price_cached, caps.price_tools)
     except Exception:  # noqa: BLE001
-        return None, None
+        return (None, None, None, None)
 
 
-def _rub_cost(tin: int, tout: int, pin: float | None, pout: float | None) -> float | None:
-    """Ориентировочная стоимость по тарифу вход/выход (верхняя граница — без учёта кеша/tools)."""
+def _rub_cost(tin: int, tout: int, cached: int, tool: int, prices: tuple) -> float | None:
+    """Точная стоимость: кеш и токены инструментов по своим тарифам, остаток входа — по входному."""
+    pin, pout, pcached, ptools = prices
     if pin is None or pout is None:
         return None
-    return round(tin / 1000 * pin + tout / 1000 * pout, 2)
+    pc = pin if pcached is None else pcached
+    pt = pin if ptools is None else ptools
+    fresh = max(0, tin - cached - tool)
+    return round(fresh / 1000 * pin + cached / 1000 * pc + tool / 1000 * pt + tout / 1000 * pout, 2)
 
 
 def process_issue(ctx: RunContext, issue: dict, workflow: str,
@@ -615,20 +620,22 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
     log.info("  вердикт доверия: %s (%d/100)", verdict.level, verdict.score)
 
     udelta = _usage_delta(usage_before, ctx.usage_snapshot())
+    a, v = udelta["analyst"], udelta["vision"]
     stats = {
-        "analyst_in": udelta["analyst"]["input_tokens"], "analyst_out": udelta["analyst"]["output_tokens"],
-        "analyst_calls": udelta["analyst"]["calls"],
-        "vision_in": udelta["vision"]["input_tokens"], "vision_out": udelta["vision"]["output_tokens"],
-        "vision_calls": udelta["vision"]["calls"],
+        "analyst_in": a["input_tokens"], "analyst_out": a["output_tokens"],
+        "analyst_cached": a["cached_tokens"], "analyst_calls": a["calls"],
+        "vision_in": v["input_tokens"], "vision_out": v["output_tokens"],
+        "vision_cached": v["cached_tokens"], "vision_calls": v["calls"],
         "tool_steps": steps,
         "duration_s": round(time.monotonic() - started, 1),
-        "total_in": udelta["analyst"]["input_tokens"] + udelta["vision"]["input_tokens"],
-        "total_out": udelta["analyst"]["output_tokens"] + udelta["vision"]["output_tokens"],
+        "total_in": a["input_tokens"] + v["input_tokens"],
+        "total_out": a["output_tokens"] + v["output_tokens"],
+        "total_cached": a["cached_tokens"] + v["cached_tokens"],
     }
-    a_pin, a_pout = _model_prices(ctx.pcfgs, ctx.analyst)
-    v_pin, v_pout = _model_prices(ctx.pcfgs, ctx.vision)
-    stats["analyst_cost"] = _rub_cost(stats["analyst_in"], stats["analyst_out"], a_pin, a_pout)
-    stats["vision_cost"] = _rub_cost(stats["vision_in"], stats["vision_out"], v_pin, v_pout)
+    stats["analyst_cost"] = _rub_cost(a["input_tokens"], a["output_tokens"], a["cached_tokens"],
+                                      a["tool_tokens"], _model_prices(ctx.pcfgs, ctx.analyst))
+    stats["vision_cost"] = _rub_cost(v["input_tokens"], v["output_tokens"], v["cached_tokens"],
+                                     v["tool_tokens"], _model_prices(ctx.pcfgs, ctx.vision))
     _costs = [c for c in (stats["analyst_cost"], stats["vision_cost"]) if c is not None]
     stats["total_cost"] = round(sum(_costs), 2) if _costs else None
 

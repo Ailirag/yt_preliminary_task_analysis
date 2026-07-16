@@ -44,15 +44,16 @@ providers:
     model_uri_template: "gpt://{folder_id}/{model}"
     folder_id_env: YANDEX_FOLDER_ID
     models:
-      # price_in/price_out — ₽ за 1000 токенов, вкл. НДС (Yandex AI Studio, синхронный режим).
-      # Оценка стоимости в отчёте — по вход/выход = ВЕРХНЯЯ граница (кеш и токены инструментов дешевле).
+      # Цены Yandex AI Studio, ₽ за 1000 токенов, вкл. НДС: price_in (вход), price_cached (кеш),
+      # price_tools (токены инструментов), price_out (выход). Стоимость в отчёте считается точно
+      # с учётом cached_tokens/tool_tokens из usage API.
       yandexgpt:        { tools: true, vision: false }
       yandexgpt/latest: { tools: true, vision: false }
-      "qwen3-235b-a22b-fp8/latest": { tools: true, vision: false, price_in: 0.5, price_out: 0.5 }
-      "qwen3.6-35b-a3b/latest":     { tools: true, vision: true,  price_in: 0.2, price_out: 0.3 }
-      "deepseek-v4-flash/latest":   { tools: true, vision: false, price_in: 0.3, price_out: 0.5 }
-      "aliceai-llm/latest":         { tools: true, vision: false, price_in: 0.5, price_out: 1.2 }
-      "yandexgpt-5.1/latest":       { tools: true, vision: false, price_in: 0.8, price_out: 0.8 }
+      "qwen3-235b-a22b-fp8/latest": { tools: true, vision: false, price_in: 0.5, price_out: 0.5, price_cached: 0.5,   price_tools: 0.5 }
+      "qwen3.6-35b-a3b/latest":     { tools: true, vision: true,  price_in: 0.2, price_out: 0.3, price_cached: 0.05,  price_tools: 0.05 }
+      "deepseek-v4-flash/latest":   { tools: true, vision: false, price_in: 0.3, price_out: 0.5, price_cached: 0.075, price_tools: 0.075 }
+      "aliceai-llm/latest":         { tools: true, vision: false, price_in: 0.5, price_out: 1.2, price_cached: 0.5,   price_tools: 0.13 }
+      "yandexgpt-5.1/latest":       { tools: true, vision: false, price_in: 0.8, price_out: 0.8, price_cached: 0.8,   price_tools: 0.2 }
 
   # Yandex через Responses API (ai.api.cloud.yandex.net): здесь модели РЕАЛЬНО вызывают
   # инструменты (в отличие от chat/completions). Для агентного анализа у Яндекса — этот провайдер.
@@ -63,11 +64,11 @@ providers:
     model_uri_template: "gpt://{folder_id}/{model}"
     folder_id_env: YANDEX_FOLDER_ID
     models:
-      "yandexgpt-5.1/latest":       { tools: true, vision: false, price_in: 0.8, price_out: 0.8 }
-      "aliceai-llm/latest":         { tools: true, vision: false, price_in: 0.5, price_out: 1.2 }
-      "deepseek-v4-flash/latest":   { tools: true, vision: false, price_in: 0.3, price_out: 0.5 }
-      "qwen3-235b-a22b-fp8/latest": { tools: true, vision: false, price_in: 0.5, price_out: 0.5 }
-      "qwen3.6-35b-a3b/latest":     { tools: true, vision: true,  price_in: 0.2, price_out: 0.3 }
+      "yandexgpt-5.1/latest":       { tools: true, vision: false, price_in: 0.8, price_out: 0.8, price_cached: 0.8,   price_tools: 0.2 }
+      "aliceai-llm/latest":         { tools: true, vision: false, price_in: 0.5, price_out: 1.2, price_cached: 0.5,   price_tools: 0.13 }
+      "deepseek-v4-flash/latest":   { tools: true, vision: false, price_in: 0.3, price_out: 0.5, price_cached: 0.075, price_tools: 0.075 }
+      "qwen3-235b-a22b-fp8/latest": { tools: true, vision: false, price_in: 0.5, price_out: 0.5, price_cached: 0.5,   price_tools: 0.5 }
+      "qwen3.6-35b-a3b/latest":     { tools: true, vision: true,  price_in: 0.2, price_out: 0.3, price_cached: 0.05,  price_tools: 0.05 }
 
   claude:
     kind: anthropic

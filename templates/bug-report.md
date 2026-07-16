@@ -64,8 +64,8 @@
 <% if stats %>
 ## Метрики анализа (авто)
 
-- **Токены:** analyst << stats.analyst_in >>→<< stats.analyst_out >> (обращений к модели: << stats.analyst_calls >>); vision << stats.vision_in >>→<< stats.vision_out >> (<< stats.vision_calls >>); **ИТОГО** << stats.total_in >>→<< stats.total_out >>
-<% if stats.total_cost is not none %>- **Ориентировочная стоимость (₽, вкл. НДС; по вход/выход — верхняя граница):** analyst ≈ << stats.analyst_cost if stats.analyst_cost is not none else 'н/д' >>; vision ≈ << stats.vision_cost if stats.vision_cost is not none else 'н/д' >>; **ИТОГО ≈ << stats.total_cost >> ₽**
+- **Токены:** analyst << stats.analyst_in >>→<< stats.analyst_out >> (из них кеш << stats.analyst_cached >>; обращений: << stats.analyst_calls >>); vision << stats.vision_in >>→<< stats.vision_out >> (кеш << stats.vision_cached >>; << stats.vision_calls >>); **ИТОГО** << stats.total_in >>→<< stats.total_out >> (кеш << stats.total_cached >>)
+<% if stats.total_cost is not none %>- **Стоимость (₽, вкл. НДС; с учётом кеша и токенов инструментов):** analyst ≈ << stats.analyst_cost if stats.analyst_cost is not none else 'н/д' >>; vision ≈ << stats.vision_cost if stats.vision_cost is not none else 'н/д' >>; **ИТОГО ≈ << stats.total_cost >> ₽**
 <% endif %>- **Обращений к инструментам (код/навигация):** << stats.tool_steps >>
 - **Время анализа:** << stats.duration_s >> с
 <% endif %>

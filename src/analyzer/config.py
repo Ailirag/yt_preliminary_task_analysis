@@ -134,8 +134,10 @@ class ModelCaps(BaseModel):
     tools: bool = True
     vision: bool = False
     force_first_tool: bool = False   # tool_choice=required на первом ходу (для моделей, что ленятся звать tools)
-    price_in: float | None = None    # ₽ за 1000 входящих токенов (вкл. НДС); None — цена неизвестна
-    price_out: float | None = None   # ₽ за 1000 исходящих токенов (вкл. НДС)
+    price_in: float | None = None      # ₽ за 1000 входящих токенов (вкл. НДС); None — цена неизвестна
+    price_out: float | None = None     # ₽ за 1000 исходящих токенов (вкл. НДС)
+    price_cached: float | None = None  # ₽ за 1000 кешированных входящих токенов (дешевле price_in)
+    price_tools: float | None = None   # ₽ за 1000 токенов инструментов (Responses отдаёт tool_tokens)
 
 
 class ProviderCfg(BaseModel):

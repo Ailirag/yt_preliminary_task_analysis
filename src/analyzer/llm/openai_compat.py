@@ -136,9 +136,12 @@ class OpenAICompatProvider(Provider):
             tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
         usage = {}
         if resp.usage:
+            det = getattr(resp.usage, "prompt_tokens_details", None)
             usage = {
                 "input_tokens": resp.usage.prompt_tokens,
                 "output_tokens": resp.usage.completion_tokens,
+                "cached_tokens": (getattr(det, "cached_tokens", 0) or 0) if det else 0,
+                "tool_tokens": 0,  # chat/completions не отдаёт tool_tokens
             }
         return LLMResponse(
             text=text,
