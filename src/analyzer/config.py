@@ -159,10 +159,30 @@ class RolesCfg(BaseModel):
     vision: str = ""
 
 
+class ProfileCfg(BaseModel):
+    """Именованный сценарий: какие модели на роли analyst/vision."""
+    analyst: str
+    vision: str = ""
+
+
 class ProvidersCfg(BaseModel):
     roles: RolesCfg
+    profiles: dict[str, ProfileCfg] = Field(default_factory=dict)
+    default_profile: str | None = None
     limits: LLMLimits = Field(default_factory=LLMLimits)
     providers: dict[str, ProviderCfg]
+
+    def effective_roles(self, profile_name: str | None = None) -> tuple[str, str]:
+        """Спеки (analyst, vision) с учётом профиля: аргумент > default_profile > roles."""
+        name = profile_name or self.default_profile
+        if name:
+            p = self.profiles.get(name)
+            if p is None:
+                raise ValueError(
+                    f"Профиль {name!r} не найден в providers.yaml (доступны: {sorted(self.profiles)})"
+                )
+            return p.analyst, p.vision
+        return self.roles.analyst, self.roles.vision
 
     def resolve(self, role_spec: str) -> tuple[str, ProviderCfg, str, ModelCaps]:
         """'провайдер/модель' -> (имя провайдера, конфиг, имя модели, capabilities)."""

@@ -58,15 +58,18 @@ def _build_run_context(args, workflow: str) -> tuple[RunContext, OnecMCP | None]
     token, org = _tracker_env(acfg)
     wiki = WikiClient(acfg.wiki.api, token, org, acfg.tracker.org_header)
 
-    analyst_spec = getattr(args, "analyst", None) or pcfgs.roles.analyst
+    profile_name = getattr(args, "profile", None)
+    a_def, v_def = pcfgs.effective_roles(profile_name)
+    analyst_spec = getattr(args, "analyst", None) or a_def
     analyst = build_provider(pcfgs, analyst_spec)
     vision_spec = getattr(args, "vision", None)
     if vision_spec is None:
-        vision_spec = pcfgs.roles.vision
+        vision_spec = v_def
     vision = None
     if vision_spec and vision_spec.lower() not in ("", "none", "off"):
         vision = build_provider(pcfgs, vision_spec)
-    log.info("Роли: analyst=%s vision=%s", analyst.label(), vision.label() if vision else "—")
+    log.info("Профиль: %s | analyst=%s vision=%s", profile_name or pcfgs.default_profile or "(roles)",
+             analyst.label(), vision.label() if vision else "—")
 
     # компонента «ИИ анализ»
     component_id = tracker.find_component_id(acfg.queue, acfg.component_name)
@@ -194,8 +197,9 @@ def cmd_preflight(args) -> int:
         except Exception as e:  # noqa: BLE001
             check("Wiki API", False, str(e))
 
-    # LLM провайдеры (роли)
-    for role_name, spec in (("analyst", pcfgs.roles.analyst), ("vision", pcfgs.roles.vision)):
+    # LLM провайдеры (роли активного профиля)
+    a_def, v_def = pcfgs.effective_roles()
+    for role_name, spec in (("analyst", a_def), ("vision", v_def)):
         if not spec:
             check(f"Роль {role_name}", True, "не задана (пропуск картинок)")
             continue
@@ -259,7 +263,8 @@ def cmd_llm_test(args) -> int:
             return 1
         specs = [f"{args.provider}/{m}" for m in pcfg.models]
     else:
-        specs = [pcfgs.roles.analyst] + ([pcfgs.roles.vision] if pcfgs.roles.vision else [])
+        a_def, v_def = pcfgs.effective_roles()
+        specs = [a_def] + ([v_def] if v_def else [])
 
     failed = 0
     for spec in specs:
@@ -366,8 +371,9 @@ def _add_run_args(p: argparse.ArgumentParser, with_selection: bool) -> None:
                        help="Режим отбора багов (по умолчанию из конфига)")
     p.add_argument("--max-steps", type=int, dest="max_steps",
                    help="Бюджет агентных шагов (по умолчанию из конфига)")
-    p.add_argument("--analyst", help="Роль analyst: провайдер/модель, например zai/glm-5.2")
-    p.add_argument("--vision", help="Роль vision: провайдер/модель; 'none' — отключить")
+    p.add_argument("--profile", help="Сценарий из providers.yaml: z.ai | yandex | z.ai-yandex")
+    p.add_argument("--analyst", help="Роль analyst: провайдер/модель (переопределяет профиль)")
+    p.add_argument("--vision", help="Роль vision: провайдер/модель; 'none' — отключить (переопределяет профиль)")
 
 
 def _load_env_file() -> None:

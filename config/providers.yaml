@@ -1,8 +1,21 @@
 # ===== LLM-провайдеры и роли моделей =====
 # Роль указывается как "<провайдер>/<модель>". Переопределяется CLI: --analyst, --vision.
 roles:
-  analyst: zai/glm-5.2          # основной анализ (текст + инструменты)
-  vision: zai/glm-4.6v          # разбор скриншотов из задач; none — выключить
+  analyst: zai/glm-5            # запасной дефолт (если не задан profile); профили ниже имеют приоритет
+  vision: zai/glm-4.6v
+
+# Готовые сценарии. Переключение одним флагом: --profile <имя>. По умолчанию — default_profile.
+default_profile: "z.ai"
+profiles:
+  "z.ai":          # устоявшийся стек: весь z.ai (GLM-5 аналитик + GLM-4.6V vision)
+    analyst: zai/glm-5
+    vision:  zai/glm-4.6v
+  "yandex":        # весь Яндекс: deepseek-v4-flash (аналитик) + мультимодальная qwen3.6-35b (vision, base64)
+    analyst: yandex/deepseek-v4-flash/latest
+    vision:  yandex/qwen3.6-35b-a3b/latest
+  "z.ai-yandex":   # гибрид «Яндекс мозг + z.ai глаза»: аналитик Яндекс (deepseek), vision — z.ai (GLM-4.6V)
+    analyst: yandex/deepseek-v4-flash/latest
+    vision:  zai/glm-4.6v
 
 limits:
   max_output_tokens: 8000
@@ -35,7 +48,7 @@ providers:
       yandexgpt/latest: { tools: true, vision: false }
       # открытые модели Yandex AI Studio (folder — из YANDEX_FOLDER_ID; ID из консоли)
       "qwen3-235b-a22b-fp8/latest": { tools: true, vision: false }
-      "qwen3.6-35b-a3b/latest":     { tools: true, vision: false }
+      "qwen3.6-35b-a3b/latest":     { tools: true, vision: true }
       "deepseek-v4-flash/latest":   { tools: true, vision: false }
       "aliceai-llm/latest":         { tools: true, vision: false }
       "yandexgpt-5.1/latest":       { tools: true, vision: false }
@@ -53,7 +66,7 @@ providers:
       "aliceai-llm/latest":         { tools: true, vision: false }
       "deepseek-v4-flash/latest":   { tools: true, vision: false }
       "qwen3-235b-a22b-fp8/latest": { tools: true, vision: false }
-      "qwen3.6-35b-a3b/latest":     { tools: true, vision: false }
+      "qwen3.6-35b-a3b/latest":     { tools: true, vision: true }
 
   claude:
     kind: anthropic
