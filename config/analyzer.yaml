@@ -16,7 +16,7 @@ bugs:
     simple: "ИИ-простая"
     complex: "ИИ-сложная"
   subtask:
-    type: task
+    type: informationanalysis   # «Анализ информации» (ключ типа задачи в очереди ONE)
     summary_prefix: "[ИИ анализ] "
     unique_prefix: "ai-bug"
 
@@ -28,7 +28,7 @@ ft:
     simple: "ИИ-простая"
     complex: "ИИ-сложная"
   subtask:
-    type: task
+    type: informationanalysis   # «Анализ информации» (ключ типа задачи в очереди ONE)
     summary_prefix: "[ИИ анализ ФТ] "
     unique_prefix: "ai-ft"
 

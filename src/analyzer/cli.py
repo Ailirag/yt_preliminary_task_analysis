@@ -147,7 +147,8 @@ def cmd_run(args, workflow: str) -> int:
     ctx, onec = _build_run_context(args, workflow)
     selection = getattr(args, "selection", None) or ctx.acfg.bugs.selection
     try:
-        results = run_workflow(ctx, workflow, selection, args.limit, args.issue)
+        results = run_workflow(ctx, workflow, selection, args.limit, args.issue,
+                               force=getattr(args, "force", False))
         _print_summary(results, ctx)
         return 0 if all(r.get("action") != "error" for r in results) else 2
     finally:
@@ -374,6 +375,8 @@ def _add_run_args(p: argparse.ArgumentParser, with_selection: bool) -> None:
     p.add_argument("--max-steps", type=int, dest="max_steps",
                    help="Бюджет агентных шагов (по умолчанию из конфига)")
     p.add_argument("--profile", help="Сценарий из providers.yaml: z.ai | yandex | z.ai-yandex")
+    p.add_argument("--force", action="store_true",
+                   help="Переанализировать, даже если ИИ-подзадача уже есть (создаёт новую версию)")
     p.add_argument("--analyst", help="Роль analyst: провайдер/модель (переопределяет профиль)")
     p.add_argument("--vision", help="Роль vision: провайдер/модель; 'none' — отключить (переопределяет профиль)")
 

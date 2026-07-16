@@ -478,8 +478,8 @@ def dump_revision(dump_path: str) -> str:
 
 
 def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
-                  result: AnalysisResult) -> tuple[str, str | None]:
-    """Возвращает (action, subtask_key)."""
+                  result: AnalysisResult, force: bool = False) -> tuple[str, str | None]:
+    """Возвращает (action, subtask_key). force -> новая версия unique (создать свежую подзадачу)."""
     key = issue["key"]
     wf = ctx.acfg.bugs if workflow == "bugs" else ctx.acfg.ft
     if not ctx.live:
@@ -496,7 +496,8 @@ def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
         description=markdown,
         issue_type=wf.subtask.type,
         component_id=ctx.component_id,
-        unique=f"{wf.subtask.unique_prefix}-{key}-v1",
+        unique=(f"{wf.subtask.unique_prefix}-{key}-{ctx.journal.run_id}" if force
+                else f"{wf.subtask.unique_prefix}-{key}-v1"),
     )
     add = [wf.done_tag, wf.complexity_tags.simple if result.complexity == "simple"
            else wf.complexity_tags.complex]
@@ -534,7 +535,7 @@ def _rub_cost(tin: int, tout: int, cached: int, tool: int, prices: tuple) -> flo
 
 
 def process_issue(ctx: RunContext, issue: dict, workflow: str,
-                  idx: int = 1, total: int = 1) -> dict:
+                  idx: int = 1, total: int = 1, force: bool = False) -> dict:
     key = issue["key"]
     started = time.monotonic()
     wf = ctx.acfg.bugs if workflow == "bugs" else ctx.acfg.ft
@@ -543,10 +544,10 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
     ctx.nav_log = []          # след навигации — по текущей задаче
     usage_before = ctx.usage_snapshot()  # база для пер-задачных метрик в отчёте
 
-    # идемпотентность: подзадача уже есть -> только долечить теги
+    # идемпотентность: подзадача уже есть -> только долечить теги (кроме --force: переанализ)
     existing = ctx.tracker.find_existing_ai_subtask(
         key, ctx.acfg.component_name, wf.subtask.summary_prefix)
-    if existing:
+    if existing and not force:
         log.info("У %s уже есть ИИ-подзадача %s — долечиваю теги", key, existing)
         if ctx.live:
             remove = [ctx.acfg.ft.trigger_tag] if workflow == "ft" else None
@@ -659,7 +660,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         },
     )
 
-    action, subtask = write_results(ctx, workflow, issue, markdown, result)
+    action, subtask = write_results(ctx, workflow, issue, markdown, result, force=force)
     return {
         "issue": key,
         "action": action,
@@ -685,7 +686,7 @@ def _usage_delta(before: dict, after: dict) -> dict:
 
 
 def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
-                 issue_key: str | None = None) -> list[dict]:
+                 issue_key: str | None = None, force: bool = False) -> list[dict]:
     issues = select_issues(ctx, workflow, selection, limit, issue_key)
     log.info("К обработке: %d задач(и)", len(issues))
     results: list[dict] = []
@@ -693,7 +694,7 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
     for i, issue in enumerate(issues):
         before = ctx.usage_snapshot()
         try:
-            r = process_issue(ctx, issue, workflow, idx=i + 1, total=len(issues))
+            r = process_issue(ctx, issue, workflow, idx=i + 1, total=len(issues), force=force)
             consecutive_errors = consecutive_errors + 1 if r.get("action") == "error" else 0
         except Exception as e:  # noqa: BLE001
             log.exception("Ошибка обработки %s", issue.get("key"))
