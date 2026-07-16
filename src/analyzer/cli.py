@@ -370,6 +370,19 @@ def _add_run_args(p: argparse.ArgumentParser, with_selection: bool) -> None:
     p.add_argument("--vision", help="Роль vision: провайдер/модель; 'none' — отключить")
 
 
+def _load_env_file() -> None:
+    """Подхватывает .env из корня проекта. Реальные переменные окружения ОС имеют приоритет
+    (override=False), так что боевой env не затирается локальным файлом."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    env_path = project_root() / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=False)
+        log.info(".env загружен: %s (переменные окружения ОС имеют приоритет)", env_path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="analyzer",
                                      description="ИИ-анализатор задач Yandex Tracker для 1С")
@@ -401,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, OSError):
             pass
     setup_logging(args.verbose)
+    _load_env_file()
 
     try:
         if args.command == "bugs":

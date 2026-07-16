@@ -39,7 +39,8 @@ uv sync
 git clone https://github.com/Ailirag/onec-vecgraph vendor/onec-vecgraph
 uv sync --directory vendor/onec-vecgraph   # его собственные зависимости
 
-# 3. Переменные окружения (User):
+# 3. Секреты — переменные окружения ОС ИЛИ файл .env в корне (cp .env.example .env).
+#    .env грузится при старте; переменные ОС имеют приоритет. .env в .gitignore.
 #    YATRACKER_TOKEN_GT, YATRACKER_ORGID_GT  — трекер/вики
 #    ZAI_API_KEY                             — z.ai (GLM-5.2 / GLM-4.6V)
 #    YANDEX_API_KEY, YANDEX_FOLDER_ID        — Yandex AI Studio (опционально)
