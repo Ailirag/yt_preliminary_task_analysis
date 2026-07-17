@@ -169,6 +169,11 @@ def cmd_run(args, workflow: str) -> int:
 
 
 def cmd_watch(args) -> int:
+    # профиль демона: CLI --profile важнее, иначе из config.watch.profile
+    if not getattr(args, "profile", None):
+        pre_acfg, _ = load_configs(getattr(args, "config", None))
+        if pre_acfg.watch.profile:
+            args.profile = pre_acfg.watch.profile
     ctx, onec = _build_run_context(args, "bugs")  # workflow берётся из config.watch (ниже)
     w = ctx.acfg.watch
     if getattr(args, "workflow", None):

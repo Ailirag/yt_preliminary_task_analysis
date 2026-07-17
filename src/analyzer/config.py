@@ -124,6 +124,7 @@ class WatchCfg(BaseModel):
     interval_s: int = 30                                   # период опроса
     workflow: Literal["bugs", "ft"] = "bugs"
     selection: Literal["no-done-tag", "trigger-tag"] = "trigger-tag"  # для демона безопаснее по тегу
+    profile: str = ""                                      # профиль providers.yaml (пусто = default_profile); CLI --profile важнее
     daily_budget: float | None = None                      # потолок стоимости за сутки в валюте аналитика; None = без лимита
     work_hours: str = ""                                   # окно работы "HH:MM-HH:MM" (локальное); пусто = круглосуточно
     lock_file: str = "analyzer.lock"                       # относительно paths.work_dir
