@@ -144,6 +144,8 @@ class ProviderCfg(BaseModel):
     kind: Literal["openai-compat", "anthropic", "openai-responses"]
     base_url: str | None = None
     api_key_env: str
+    currency: str = "₽"          # валюта тарифов провайдера для отчёта («₽» Yandex, «$» z.ai)
+    price_unit: int = 1000       # за сколько токенов указаны price_* (Yandex — 1000, z.ai — 1_000_000)
     model_uri_template: str | None = None
     folder_id_env: str | None = None
     models: dict[str, ModelCaps]

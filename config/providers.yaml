@@ -29,12 +29,14 @@ providers:
     base_url: "https://api.z.ai/api/paas/v4"           # обычный эндпоинт (pay-as-you-go) — активен
     # base_url: "https://api.z.ai/api/coding/paas/v4"   # подписочный (GLM Coding Plan) — без vision
     api_key_env: ZAI_API_KEY
+    currency: "$"                # z.ai — доллары
+    price_unit: 1000000          # z.ai: цены за 1 000 000 токенов (как на сайте z.ai)
     models:
-      glm-5.2:     { tools: true, vision: false }
-      glm-4.6v:    { tools: true, vision: true }
-      glm-5-turbo: { tools: true, vision: false }
-      glm-5:       { tools: true, vision: false }
-      glm-4.7:     { tools: true, vision: false }
+      glm-5.2:     { tools: true, vision: false, price_in: 1.4, price_out: 4.4, price_cached: 0.26 }
+      glm-4.6v:    { tools: true, vision: true,  price_in: 0.3, price_out: 0.9, price_cached: 0.05 }
+      glm-5-turbo: { tools: true, vision: false, price_in: 1.2, price_out: 4.0, price_cached: 0.24 }
+      glm-5:       { tools: true, vision: false, price_in: 1.0, price_out: 3.2, price_cached: 0.2 }
+      glm-4.7:     { tools: true, vision: false, price_in: 0.6, price_out: 2.2, price_cached: 0.11 }
 
   yandex:
     kind: openai-compat

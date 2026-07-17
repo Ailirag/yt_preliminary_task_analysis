@@ -513,25 +513,28 @@ def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
 # ---------- обработка одной задачи ----------
 
 def _model_prices(pcfgs, provider) -> tuple:
-    """Тарифы (вход, выход, кеш, инструменты) ₽/1000 модели провайдера; None-ы если цена не задана."""
+    """Тарифы (вход, выход, кеш, инструменты, валюта, ед.=токенов_на_цену); None-ы если цены нет."""
     if provider is None:
-        return (None, None, None, None)
+        return (None, None, None, None, "₽", 1000)
     try:
-        _, _, _, caps = pcfgs.resolve(f"{provider.name}/{provider.model}")
-        return (caps.price_in, caps.price_out, caps.price_cached, caps.price_tools)
+        _, pcfg, _, caps = pcfgs.resolve(f"{provider.name}/{provider.model}")
+        return (caps.price_in, caps.price_out, caps.price_cached, caps.price_tools,
+                pcfg.currency, pcfg.price_unit)
     except Exception:  # noqa: BLE001
-        return (None, None, None, None)
+        return (None, None, None, None, "₽", 1000)
 
 
 def _rub_cost(tin: int, tout: int, cached: int, tool: int, prices: tuple) -> float | None:
-    """Точная стоимость: кеш и токены инструментов по своим тарифам, остаток входа — по входному."""
-    pin, pout, pcached, ptools = prices
+    """Точная стоимость: кеш и токены инструментов по своим тарифам, остаток входа — по входному.
+    Цена указана за prices[5] токенов (Yandex — 1000, z.ai — 1_000_000)."""
+    pin, pout, pcached, ptools = prices[0], prices[1], prices[2], prices[3]
     if pin is None or pout is None:
         return None
+    unit = prices[5] if len(prices) > 5 else 1000
     pc = pin if pcached is None else pcached
     pt = pin if ptools is None else ptools
     fresh = max(0, tin - cached - tool)
-    return round(fresh / 1000 * pin + cached / 1000 * pc + tool / 1000 * pt + tout / 1000 * pout, 2)
+    return round(fresh / unit * pin + cached / unit * pc + tool / unit * pt + tout / unit * pout, 2)
 
 
 def process_issue(ctx: RunContext, issue: dict, workflow: str,
@@ -633,12 +636,22 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         "total_out": a["output_tokens"] + v["output_tokens"],
         "total_cached": a["cached_tokens"] + v["cached_tokens"],
     }
-    stats["analyst_cost"] = _rub_cost(a["input_tokens"], a["output_tokens"], a["cached_tokens"],
-                                      a["tool_tokens"], _model_prices(ctx.pcfgs, ctx.analyst))
-    stats["vision_cost"] = _rub_cost(v["input_tokens"], v["output_tokens"], v["cached_tokens"],
-                                     v["tool_tokens"], _model_prices(ctx.pcfgs, ctx.vision))
-    _costs = [c for c in (stats["analyst_cost"], stats["vision_cost"]) if c is not None]
-    stats["total_cost"] = round(sum(_costs), 2) if _costs else None
+    a_prices = _model_prices(ctx.pcfgs, ctx.analyst)
+    v_prices = _model_prices(ctx.pcfgs, ctx.vision)
+    stats["analyst_cost"] = _rub_cost(a["input_tokens"], a["output_tokens"], a["cached_tokens"], a["tool_tokens"], a_prices)
+    stats["vision_cost"] = _rub_cost(v["input_tokens"], v["output_tokens"], v["cached_tokens"], v["tool_tokens"], v_prices)
+    stats["analyst_ccy"], stats["vision_ccy"] = a_prices[4], v_prices[4]
+    ac, vc = stats["analyst_cost"], stats["vision_cost"]
+    if ac is not None and vc is not None:
+        # суммируем только при одной валюте, иначе итог показываем по ролям
+        stats["total_cost"] = round(ac + vc, 2) if a_prices[4] == v_prices[4] else None
+        stats["total_ccy"] = a_prices[4] if a_prices[4] == v_prices[4] else None
+    elif ac is not None:
+        stats["total_cost"], stats["total_ccy"] = ac, a_prices[4]
+    elif vc is not None:
+        stats["total_cost"], stats["total_ccy"] = vc, v_prices[4]
+    else:
+        stats["total_cost"], stats["total_ccy"] = None, None
 
     markdown = render_report(
         ctx.project_root / "templates",
