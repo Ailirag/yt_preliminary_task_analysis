@@ -1,0 +1,24 @@
+# venv'ы пересобираются в образе (uv sync)
+.venv/
+vendor/**/.venv/
+**/.venv/
+
+# git и история
+.git/
+.gitignore
+
+# данные компании и рантайм-состояние (в образ не попадают)
+work/
+journal/
+.env
+
+# кэши/мусор
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+**/*.db
+
+# не нужно в рантайме
+tests/

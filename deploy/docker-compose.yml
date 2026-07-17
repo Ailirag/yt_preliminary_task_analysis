@@ -1,0 +1,32 @@
+# Разворот ИИ-анализатора одним контейнером.
+# ВАЖНО (эта машина): Docker общий (рядом крутятся infinity/qdrant) — демон/ data-root НЕ трогаем.
+# Все данные — bind-маунтами на большой диск /mnt/storage (на / только образ ~1 ГБ).
+# Контейнер работает под uid 10001 (пользователь app из образа), поэтому каталоги под запись
+# должны принадлежать 10001 (см. deploy/README.md, раздел про подготовку каталогов).
+services:
+  analyzer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: tracker-analyzer:latest
+    container_name: tracker-analyzer
+    init: true                       # tini как PID 1: пробрасывает SIGTERM, собирает зомби
+    restart: unless-stopped
+    stop_grace_period: 600s          # docker stop шлёт SIGTERM -> демон доигрывает текущий разбор (~7 мин) и снимает лок
+    env_file:
+      - /home/adm_garipov_ir/analyzer.env   # СЕКРЕТЫ (не в git): YATRACKER_TOKEN_GT, YATRACKER_ORGID_GT, ZAI_API_KEY (+ YANDEX_*)
+    # environment:                   # раскомментируйте, если исходящий доступ только через прокси
+    #   HTTP_PROXY: "http://proxy.local:3128"
+    #   HTTPS_PROXY: "http://proxy.local:3128"
+    #   NO_PROXY: "localhost,127.0.0.1"
+    volumes:
+      # git-выгрузка конфигурации УТ (host: git clone/pull, владелец — пользователь), только чтение.
+      # ВАЖНО: analyzer.yaml -> onec.dump_path ДОЛЖЕН быть ровно /data/dump (digest FTS зависит от строки пути).
+      - /mnt/storage/analyzer/dump:/data/dump:ro
+      # прод-конфиг: копия config/analyzer.yaml с dump_path: /data/dump, mode: live, блоком watch.
+      - /home/adm_garipov_ir/analyzer/config/analyzer.yaml:/app/config/analyzer.yaml:ro
+      # FTS-индекс (~1 ГБ) — переживает пересоздание контейнера (владелец 10001).
+      - /mnt/storage/analyzer/onec-lite:/data/onec-lite
+      # операционное состояние и данные компании (владелец 10001).
+      - /mnt/storage/analyzer/work:/app/work
+      - /mnt/storage/analyzer/journal:/app/journal
