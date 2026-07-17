@@ -5,16 +5,20 @@
 set -euo pipefail
 
 DUMP="${ONEC_DUMP_PATH:-/data/dump}"
+STATE="${ONEC_LITE_STATE:-/data/onec-lite/config.json}"
+FTS_DIR="$(dirname "$STATE")/fts"
 
-if [ -d "$DUMP" ] && [ -n "$(ls -A "$DUMP" 2>/dev/null)" ]; then
-  echo "[entrypoint] onec-lite: проверяю/строю FTS-индекс (root=$DUMP)…"
+# Строим индекс только если его ещё нет (том persistent). Иначе пропускаем — иначе каждый рестарт
+# заново сканирует десятки тысяч файлов (особенно медленно при bind-mount с Windows/drvfs).
+# Обновления выгрузки подхватываются авто-догоном onec-lite (mtime, ~30 с во время поиска).
+if ls "$FTS_DIR"/*.db >/dev/null 2>&1; then
+  echo "[entrypoint] FTS-индекс уже построен ($FTS_DIR) — пропускаю построение."
+elif [ -d "$DUMP" ] && [ -n "$(ls -A "$DUMP" 2>/dev/null)" ]; then
+  echo "[entrypoint] onec-lite: строю FTS-индекс (root=$DUMP)…"
   # Тот же --root, что и в рантайме (analyzer.yaml: onec.dump_path=$DUMP) — иначе digest БД не совпадёт.
-  if uv run --no-sync --directory vendor/onec-vecgraph \
-        onec-vecgraph serve-lite --root "$DUMP" --build-fts --check; then
-    echo "[entrypoint] FTS-индекс готов."
-  else
-    echo "[entrypoint] ВНИМАНИЕ: построить FTS-индекс не удалось — fts_search может быть недоступен, остальной анализ работает."
-  fi
+  uv run --no-sync --directory vendor/onec-vecgraph \
+      onec-vecgraph serve-lite --root "$DUMP" --build-fts --check \
+    || echo "[entrypoint] ВНИМАНИЕ: построить FTS-индекс не удалось — fts_search может быть недоступен."
 else
   echo "[entrypoint] ВНИМАНИЕ: выгрузка $DUMP пуста или не смонтирована — индекс не строю."
 fi

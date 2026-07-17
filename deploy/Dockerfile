@@ -5,8 +5,11 @@
 ########################## build ##########################
 FROM python:3.12-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# UV_CACHE_DIR переопределяет виндовый cache-dir из vendor/onec-vecgraph/pyproject.toml
+# ("D:/tools/uv/cache") — в Linux двоеточие ломает PATH сборки.
 ENV UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1
+    UV_COMPILE_BYTECODE=1 \
+    UV_CACHE_DIR=/tmp/uv-cache
 WORKDIR /app
 
 # Полный исходник (venv'ы исключены через .dockerignore и создаются здесь заново).
