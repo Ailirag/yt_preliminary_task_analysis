@@ -33,6 +33,10 @@ class Journal:
         """Аудит каждой live-записи в трекер."""
         self._append("writes.jsonl", kwargs)
 
+    def run_summary(self, **kwargs) -> None:
+        """Итоговый агрегат прогона (одна строка в runs.jsonl, kind=run_summary)."""
+        self._append("runs.jsonl", {"kind": "run_summary", **kwargs})
+
     def dry_run_report(self, issue_key: str, markdown: str) -> Path:
         path = self.dir / "dry-run" / f"{issue_key}.md"
         path.write_text(markdown, encoding="utf-8")

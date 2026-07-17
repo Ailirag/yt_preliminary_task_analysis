@@ -15,7 +15,7 @@ from .config import load_configs, project_root
 from .journal import Journal, setup_logging
 from .llm import ImagePart, Msg, ToolSpec, build_provider, extract_json
 from .onec import OnecMCP
-from .pipeline import RunContext, run_workflow
+from .pipeline import RunContext, run_workflow, summarize_run
 from .tracker import TrackerClient
 from .wiki import WikiClient
 
@@ -118,24 +118,29 @@ def _print_summary(results: list[dict], ctx) -> None:
             line += f" | ОШИБКА: {r['error']}"
         print(line)
 
-    # суммарный расход токенов раздельно по ролям моделей
-    totals: dict = {}
-    for r in results:
-        for role, vals in (r.get("usage") or {}).items():
-            t = totals.setdefault(role, {"input_tokens": 0, "output_tokens": 0, "calls": 0})
-            for k in t:
-                t[k] += int(vals.get(k, 0))
-    if totals:
+    # агрегат прогона: действия, доверие, стоимость, токены
+    s = summarize_run(results)
+    print("  Действия: " + ", ".join(f"{k}={v}" for k, v in sorted(s["actions"].items())))
+    if s["trust"]:
+        tr = ", ".join(f"{k}={v}" for k, v in s["trust"].items())
+        conf = f"; средняя уверенность {s['avg_confidence']}/100" if s["avg_confidence"] is not None else ""
+        print(f"  Доверие: {tr}{conf}")
+    if s["cost_by_currency"]:
+        print("  Стоимость (с учётом кеша): "
+              + "; ".join(f"{v} {ccy}" for ccy, v in s["cost_by_currency"].items()))
+    tokens = s["tokens"]
+    if tokens:
         labels = {"analyst": ctx.analyst.label(),
                   "vision": ctx.vision.label() if ctx.vision else "не задана"}
         print("  Токены за прогон (раздельно по моделям):")
         grand_in = grand_out = 0
         for role in ("analyst", "vision"):
-            v = totals.get(role)
+            v = tokens.get(role)
             if not v or (v["input_tokens"] == 0 and v["output_tokens"] == 0 and v["calls"] == 0):
                 continue
             print(f"    {role} [{labels.get(role, role)}]: "
-                  f"in={v['input_tokens']} out={v['output_tokens']} вызовов={v['calls']}")
+                  f"in={v['input_tokens']} out={v['output_tokens']} "
+                  f"(кеш {v.get('cached_tokens', 0)}) вызовов={v['calls']}")
             grand_in += v["input_tokens"]
             grand_out += v["output_tokens"]
         print(f"    ИТОГО: in={grand_in} out={grand_out}")

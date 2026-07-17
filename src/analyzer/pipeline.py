@@ -19,6 +19,7 @@ from .onec import OnecMCP
 from .prompts import VISION_PROMPT, bug_system_prompt, ft_system_prompt
 from .report import render_report
 from .tracker import TrackerClient
+from .users import UserMap
 from .wiki import WikiClient, extract_wiki_urls
 
 log = logging.getLogger("analyzer.pipeline")
@@ -76,6 +77,68 @@ def build_query(acfg: AnalyzerCfg, workflow: str, selection: str) -> str:
     return f'Queue: {q} Resolution: empty() Tags: "{f.trigger_tag}" "Sort by": Updated ASC'
 
 
+def _tag_ids(raw) -> set[str]:
+    """Нормализация списка тегов из changelog (from/to): строки или объекты с id."""
+    out: set[str] = set()
+    for t in (raw or []):
+        out.add(t if isinstance(t, str) else (t.get("id") or t.get("display") or ""))
+    return out
+
+
+def _allowed_tokens(ctx: "RunContext", allowed: list[str]) -> set[str]:
+    """Множество токенов для сверки автора (в нижнем регистре): uid из разрешённых email
+    + сырые записи (uid / отображаемое имя). Email резолвится в uid через справочник
+    трекера с файловым кешем work/user_map.json."""
+    tokens = {a.strip().lower() for a in allowed if a and a.strip() and "@" not in a}
+    emails = [a for a in allowed if a and "@" in a]
+    if emails:
+        cache = ctx.project_root / ctx.acfg.paths.work_dir / "user_map.json"
+        try:
+            resolved = UserMap(cache).resolve(emails, ctx.tracker.get_users)
+            for uids in resolved.values():   # у одного человека может быть неск. активных аккаунтов
+                tokens |= {str(u).strip().lower() for u in uids}
+        except Exception as e:  # noqa: BLE001
+            log.warning("Не удалось разрешить email в id (%s) — email из белого списка пропущены", e)
+    return tokens
+
+
+def _trigger_set_by_allowed(ctx: RunContext, key: str, trigger_tag: str,
+                            allowed: list[str]) -> bool:
+    """True, если тег-триггер добавлен кем-то из allowed (сверка по id ИЛИ имени, без регистра).
+    Пустой allowed = разрешено всем. Тег без события добавления в истории (проставлен при
+    создании) → False: автора достоверно не определить, задачу пропускаем."""
+    if not allowed:
+        return True
+    norm = _allowed_tokens(ctx, allowed)
+    if not norm:
+        log.warning("  %s: белый список задан, но ни одна запись не разрешена в id — пропускаю", key)
+        return False
+    try:
+        entries = ctx.tracker.get_changelog(key, field="tags")
+    except Exception as e:  # noqa: BLE001
+        log.warning("  %s: не удалось получить историю тегов (%s) — пропускаю", key, e)
+        return False
+    # changelog в хронологическом порядке; берём АВТОРА ПОСЛЕДНЕГО добавления тега-триггера
+    adder: dict | None = None
+    for entry in entries:
+        for f in (entry.get("fields") or []):
+            if ((f.get("field") or {}).get("id")) != "tags":
+                continue
+            if trigger_tag in _tag_ids(f.get("to")) and trigger_tag not in _tag_ids(f.get("from")):
+                adder = entry.get("updatedBy") or {}
+    if adder is None:
+        log.info("  %s: тег %r без события добавления (проставлен при создании?) — пропускаю",
+                 key, trigger_tag)
+        return False
+    who_id = str(adder.get("id") or "").strip().lower()
+    who_display = str(adder.get("display") or "").strip().lower()
+    if who_id in norm or who_display in norm:
+        return True
+    log.info("  %s: тег %r поставил %r — не из белого списка, пропускаю",
+             key, trigger_tag, adder.get("display") or adder.get("id"))
+    return False
+
+
 def select_issues(ctx: RunContext, workflow: str, selection: str, limit: int,
                   issue_key: str | None) -> list[dict]:
     if issue_key:
@@ -94,6 +157,9 @@ def select_issues(ctx: RunContext, workflow: str, selection: str, limit: int,
             if b.done_tag in tags:
                 continue
             if selection == "trigger-tag" and b.trigger_tag not in tags:
+                continue
+            if selection == "trigger-tag" and not _trigger_set_by_allowed(
+                    ctx, issue["key"], b.trigger_tag, b.trigger_authors):
                 continue
         else:
             if ctx.acfg.ft.trigger_tag not in tags:
@@ -681,7 +747,8 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         "complexity": result.complexity,
         "trust": verdict.level,
         "confidence": verdict.score,
-        "cost_rub": stats["total_cost"],
+        "cost": stats["total_cost"],
+        "currency": stats["total_ccy"],
         "tool_steps": steps,
         "duration_s": round(time.monotonic() - started, 1),
     }
@@ -696,6 +763,39 @@ def _usage_delta(before: dict, after: dict) -> dict:
         b = before.get(role, {})
         out[role] = {k: int(v) - int(b.get(k, 0)) for k, v in vals.items()}
     return out
+
+
+def summarize_run(results: list[dict]) -> dict:
+    """Агрегат прогона: счётчики действий, распределение доверия, средняя уверенность,
+    стоимость по валютам и суммарные токены по ролям. Чистая функция (отчёт + тесты)."""
+    actions: dict[str, int] = {}
+    trust: dict[str, int] = {}
+    confs: list[float] = []
+    cost_by_ccy: dict[str, float] = {}
+    tokens: dict[str, dict] = {}
+    for r in results:
+        a = r.get("action") or "?"
+        actions[a] = actions.get(a, 0) + 1
+        if r.get("trust"):
+            trust[r["trust"]] = trust.get(r["trust"], 0) + 1
+        if isinstance(r.get("confidence"), (int, float)):
+            confs.append(float(r["confidence"]))
+        c, ccy = r.get("cost"), r.get("currency")
+        if isinstance(c, (int, float)) and ccy:
+            cost_by_ccy[ccy] = round(cost_by_ccy.get(ccy, 0.0) + float(c), 2)
+        for role, vals in (r.get("usage") or {}).items():
+            t = tokens.setdefault(role, {"input_tokens": 0, "output_tokens": 0,
+                                         "cached_tokens": 0, "calls": 0})
+            for k in t:
+                t[k] += int(vals.get(k, 0))
+    return {
+        "issues": len(results),
+        "actions": actions,
+        "trust": trust,
+        "avg_confidence": round(sum(confs) / len(confs), 1) if confs else None,
+        "cost_by_currency": cost_by_ccy,
+        "tokens": tokens,
+    }
 
 
 def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
@@ -726,4 +826,5 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
             break
         if i < len(issues) - 1:
             time.sleep(ctx.acfg.limits.throttle_between_issues_s)
+    ctx.journal.run_summary(**summarize_run(results))
     return results

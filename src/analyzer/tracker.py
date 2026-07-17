@@ -141,6 +141,43 @@ class TrackerClient:
     def count(self, query: str) -> int:
         return int(self._json("POST", "/v2/issues/_count", json={"query": query}))
 
+    def get_changelog(self, key: str, field: str | None = None,
+                      per_page: int = 100, max_pages: int = 10) -> list[dict]:
+        """История изменений задачи (кто что менял from->to и когда).
+        field — фильтр по полю трекера (напр. 'tags'). Cursor-пагинация по заголовку Link."""
+        results: list[dict] = []
+        url = f"{self.base_url}/v2/issues/{key}/changelog"
+        params: dict[str, Any] | None = {"perPage": per_page}
+        if field:
+            params["field"] = field
+        for _ in range(max_pages):
+            resp = self._request("GET", url, params=params)
+            resp.raise_for_status()
+            batch = resp.json() if resp.content else []
+            results.extend(batch)
+            nxt = resp.links.get("next", {}).get("url")
+            if not nxt or not batch:
+                break
+            url, params = nxt, None  # следующий URL уже содержит курсор
+        return results
+
+    def get_users(self, per_page: int = 1000, max_pages: int = 50) -> list[dict]:
+        """Справочник пользователей (uid, email, login, display, dismissed).
+        uid совпадает с changelog updatedBy.id. Пагинация по заголовку Link."""
+        results: list[dict] = []
+        url = f"{self.base_url}/v2/users"
+        params: dict[str, Any] | None = {"perPage": per_page}
+        for _ in range(max_pages):
+            resp = self._request("GET", url, params=params)
+            resp.raise_for_status()
+            batch = resp.json() if resp.content else []
+            results.extend(batch)
+            nxt = resp.links.get("next", {}).get("url")
+            if not nxt or not batch:
+                break
+            url, params = nxt, None  # следующий URL уже содержит курсор
+        return results
+
     # ---------- write-guard ----------
 
     def _guard_tags_only(self, key: str, payload: dict) -> None:

@@ -27,6 +27,12 @@ class BugsCfg(BaseModel):
     selection: Literal["no-done-tag", "trigger-tag"] = "no-done-tag"
     trigger_tag: str
     done_tag: str
+    # Белый список авторов тега-триггера (только для selection: trigger-tag).
+    # Пусто = тег поставил кто угодно. Иначе задача берётся в работу, только если
+    # тег-триггер добавил кто-то из списка. Запись — e-mail (предпочтительно; резолвится
+    # в uid активного пользователя через справочник трекера, кеш work/user_map.json),
+    # либо uid, либо отображаемое имя. Сверка без регистра.
+    trigger_authors: list[str] = Field(default_factory=list)
     complexity_tags: ComplexityTags
     subtask: SubtaskCfg
 
