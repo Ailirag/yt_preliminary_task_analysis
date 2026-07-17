@@ -61,6 +61,17 @@ class RunContext:
         """Глубокая копия счётчиков (для вычисления пер-задачной дельты)."""
         return {role: dict(vals) for role, vals in self.usage.items()}
 
+    def reset_for_run(self, run_id: str) -> None:
+        """Сброс пер-прогонного состояния для нового тика демона; тяжёлые ресурсы
+        (tracker/wiki/onec/провайдеры) переиспользуются, меняется лишь run_id журнала."""
+        for bucket in self.usage.values():
+            for k in bucket:
+                bucket[k] = 0
+        self.vision_calls = 0
+        self.nav_log.clear()
+        self.related_cache.clear()
+        self.journal.run_id = run_id
+
 
 # ---------- выборка ----------
 
@@ -168,6 +179,22 @@ def select_issues(ctx: RunContext, workflow: str, selection: str, limit: int,
         if len(out) >= limit:
             break
     return out
+
+
+def count_candidates(ctx: RunContext, workflow: str, selection: str) -> int:
+    """Дешёвый гейт демона: YQL-оценка числа кандидатов перед тяжёлым прогоном.
+    Верхняя оценка — тонкие фильтры (тип задачи, белый список авторов) применяются позже.
+    При ошибке возвращает 1 (fail-open: не блокируем анализ из-за сбоя оценки)."""
+    try:
+        return ctx.tracker.count(build_query(ctx.acfg, workflow, selection))
+    except Exception as e:  # noqa: BLE001
+        log.warning("Не удалось оценить число кандидатов (%s) — продолжаю прогон", e)
+        return 1
+
+
+def analyst_currency(ctx: RunContext) -> str:
+    """Валюта тарифа аналитика ($/₽) — для сверки с дневным бюджет-капом."""
+    return _model_prices(ctx.pcfgs, ctx.analyst)[4]
 
 
 # ---------- досье ----------
@@ -799,12 +826,16 @@ def summarize_run(results: list[dict]) -> dict:
 
 
 def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
-                 issue_key: str | None = None, force: bool = False) -> list[dict]:
+                 issue_key: str | None = None, force: bool = False,
+                 should_stop=None) -> list[dict]:
     issues = select_issues(ctx, workflow, selection, limit, issue_key)
     log.info("К обработке: %d задач(и)", len(issues))
     results: list[dict] = []
     consecutive_errors = 0
     for i, issue in enumerate(issues):
+        if should_stop is not None and should_stop():
+            log.info("Остановка по сигналу — прерываю прогон (обработано %d/%d)", i, len(issues))
+            break
         before = ctx.usage_snapshot()
         try:
             r = process_issue(ctx, issue, workflow, idx=i + 1, total=len(issues), force=force)

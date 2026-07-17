@@ -119,6 +119,18 @@ class NavigationCfg(BaseModel):
     max_search_results: int = 10
 
 
+class WatchCfg(BaseModel):
+    """Резидентный демон (analyzer watch): периодический опрос трекера."""
+    interval_s: int = 30                                   # период опроса
+    workflow: Literal["bugs", "ft"] = "bugs"
+    selection: Literal["no-done-tag", "trigger-tag"] = "trigger-tag"  # для демона безопаснее по тегу
+    daily_budget: float | None = None                      # потолок стоимости за сутки в валюте аналитика; None = без лимита
+    work_hours: str = ""                                   # окно работы "HH:MM-HH:MM" (локальное); пусто = круглосуточно
+    lock_file: str = "analyzer.lock"                       # относительно paths.work_dir
+    error_backoff_s: int = 60                              # пауза после ошибки тика (растёт до max_backoff_s)
+    max_backoff_s: int = 900
+
+
 class AnalyzerCfg(BaseModel):
     queue: str
     component_name: str
@@ -132,6 +144,7 @@ class AnalyzerCfg(BaseModel):
     report: ReportCfg
     paths: PathsCfg
     navigation: NavigationCfg = Field(default_factory=NavigationCfg)
+    watch: WatchCfg = Field(default_factory=WatchCfg)
 
 
 # ---------- providers.yaml ----------

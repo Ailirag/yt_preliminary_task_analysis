@@ -1,0 +1,46 @@
+[Unit]
+Description=AI Tracker Analyzer daemon (analyzer watch)
+Documentation=https://github.com/Ailirag/yt_preliminary_task_analysis
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Отдельный непривилегированный пользователь (создать заранее: useradd -r -s /usr/sbin/nologin analyzer)
+User=analyzer
+Group=analyzer
+
+# Каталог с клоном репозитория (в нём config/, work/, journal/, vendor/onec-vecgraph)
+WorkingDirectory=/opt/analyzer
+
+# Секреты и окружение — НЕ в git. Файл: KEY=VALUE построчно, chmod 600, владелец analyzer:
+#   YATRACKER_TOKEN_GT=...   YATRACKER_ORGID_GT=...   ZAI_API_KEY=...
+#   (+ YANDEX_API_KEY, YANDEX_FOLDER_ID при использовании Yandex)
+EnvironmentFile=/etc/analyzer/analyzer.env
+# uv кладёт кеш в $HOME — задаём явно, чтобы не зависеть от HOME сервисного пользователя
+Environment=UV_CACHE_DIR=/opt/analyzer/.uv-cache
+
+# Путь к uv уточнить: `which uv` (часто /usr/local/bin/uv или /root/.local/bin/uv)
+ExecStart=/usr/local/bin/uv run analyzer watch --live
+
+# Мягкая остановка: systemctl stop шлёт SIGTERM -> демон доигрывает текущую задачу и снимает лок.
+# Один разбор бага ~7 мин, поэтому даём запас перед SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=600
+
+Restart=on-failure
+RestartSec=10
+
+# Гигиена/безопасность
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/analyzer
+PrivateTmp=true
+
+# Логи -> journald (journalctl -u analyzer -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=analyzer
+
+[Install]
+WantedBy=multi-user.target

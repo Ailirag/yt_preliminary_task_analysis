@@ -5,13 +5,16 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 import struct
 import sys
+import threading
 import zlib
 from datetime import datetime
 from pathlib import Path
 
 from .config import load_configs, project_root
+from .daemon import run_watch
 from .journal import Journal, setup_logging
 from .llm import ImagePart, Msg, ToolSpec, build_provider, extract_json
 from .onec import OnecMCP
@@ -156,6 +159,37 @@ def cmd_run(args, workflow: str) -> int:
                                force=getattr(args, "force", False))
         _print_summary(results, ctx)
         return 0 if all(r.get("action") != "error" for r in results) else 2
+    finally:
+        if onec:
+            onec.stop()
+        ctx.tracker.close()
+        ctx.wiki.close()
+
+
+def cmd_watch(args) -> int:
+    ctx, onec = _build_run_context(args, "bugs")  # workflow берётся из config.watch (ниже)
+    w = ctx.acfg.watch
+    if getattr(args, "workflow", None):
+        w.workflow = args.workflow
+    if getattr(args, "interval", None):
+        w.interval_s = args.interval
+    if getattr(args, "selection", None):
+        w.selection = args.selection
+    if getattr(args, "daily_budget", None) is not None:
+        w.daily_budget = args.daily_budget
+
+    stop = threading.Event()
+
+    def _handler(signum, _frame):
+        log.info("watch: сигнал %s — остановлюсь после текущей задачи", signum)
+        stop.set()
+
+    signal.signal(signal.SIGINT, _handler)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _handler)
+    try:
+        run_watch(ctx, stop=stop)
+        return 0
     finally:
         if onec:
             onec.stop()
@@ -412,6 +446,20 @@ def main(argv: list[str] | None = None) -> int:
     p_ft = sub.add_parser("ft", help="Workflow 2: анализ готовых ФТ (тег-триггер)")
     _add_run_args(p_ft, with_selection=False)
 
+    p_watch = sub.add_parser("watch", help="Резидентный демон: опрос трекера в цикле (systemd)")
+    p_watch.add_argument("--workflow", choices=["bugs", "ft"], help="Что обрабатывать (по умолч. из config.watch)")
+    p_watch.add_argument("--selection", choices=["no-done-tag", "trigger-tag"],
+                         help="Отбор багов (по умолч. из config.watch)")
+    p_watch.add_argument("--interval", type=int, help="Период опроса, сек (по умолч. из config.watch)")
+    p_watch.add_argument("--daily-budget", type=float, dest="daily_budget",
+                         help="Дневной бюджет-кап в валюте аналитика ($/₽)")
+    p_watch.add_argument("--live", action="store_true", help="Запись в трекер (требует mode: live)")
+    p_watch.add_argument("--queue", help="Переопределить очередь из конфига")
+    p_watch.add_argument("--profile", help="Сценарий из providers.yaml: z.ai | yandex | z.ai-yandex")
+    p_watch.add_argument("--analyst", help="Роль analyst: провайдер/модель")
+    p_watch.add_argument("--vision", help="Роль vision: провайдер/модель; 'none' — отключить")
+    p_watch.add_argument("--max-steps", type=int, dest="max_steps", help="Бюджет агентных шагов")
+
     sub.add_parser("preflight", help="Самопроверка окружения и доступов")
 
     p_llm = sub.add_parser("llm-test", help="Проверка LLM-провайдеров (чат/JSON/tools/vision)")
@@ -439,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "ft":
             args.limit = args.limit or load_configs(args.config)[0].limits.max_issues_per_run
             return cmd_run(args, "ft")
+        if args.command == "watch":
+            return cmd_watch(args)
         if args.command == "preflight":
             return cmd_preflight(args)
         if args.command == "llm-test":
