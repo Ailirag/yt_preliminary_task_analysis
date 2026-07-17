@@ -13,12 +13,14 @@ import zlib
 from datetime import datetime
 from pathlib import Path
 
+from .budget import DailySpend
 from .config import load_configs, project_root
 from .daemon import run_watch
 from .journal import Journal, setup_logging
 from .llm import ImagePart, Msg, ToolSpec, build_provider, extract_json
 from .onec import OnecMCP
-from .pipeline import RunContext, run_workflow, summarize_run
+from .pipeline import RunContext, build_query, run_workflow, summarize_run
+from .status import budget_state, daemon_state, read_issue_rows, todays_rows
 from .tracker import TrackerClient
 from .wiki import WikiClient
 
@@ -195,6 +197,77 @@ def cmd_watch(args) -> int:
             onec.stop()
         ctx.tracker.close()
         ctx.wiki.close()
+
+
+def cmd_status(args) -> int:
+    acfg, pcfgs = load_configs(getattr(args, "config", None))
+    root = project_root()
+    work = root / acfg.paths.work_dir
+    now = datetime.now()
+    now_ts = now.timestamp()
+    today = now.strftime("%Y-%m-%d")
+    w = acfg.watch
+
+    st = daemon_state(work / w.lock_file, now_ts, max(w.interval_s * 3, 120))
+    try:
+        a_spec, _ = pcfgs.effective_roles()
+    except Exception:  # noqa: BLE001
+        a_spec = pcfgs.roles.analyst
+    try:
+        currency = pcfgs.resolve(a_spec)[1].currency
+    except Exception:  # noqa: BLE001
+        currency = "₽"
+
+    spend = DailySpend(work / "daily_spend.json")
+    b = budget_state(spend.spent(today, currency), w.daily_budget, currency)
+
+    rows = read_issue_rows(root / acfg.paths.journal_dir / "runs.jsonl")
+    todays = todays_rows(rows, today)
+    summ = summarize_run(todays)
+
+    pending = None
+    token, org = _tracker_env(acfg)
+    if token and org:
+        try:
+            tr = TrackerClient.from_env(acfg.tracker, live=False)
+            pending = tr.count(build_query(acfg, w.workflow, w.selection))
+            tr.close()
+        except Exception:  # noqa: BLE001
+            pending = None
+
+    print(f"\n=== ANALYZER STATUS === ({now.strftime('%Y-%m-%d %H:%M')})")
+    if st["running"]:
+        print(f"Демон:     работает (PID {st['pid']}, heartbeat {st['age_s']:.0f}с назад)")
+    elif st["pid"] is not None:
+        print(f"Демон:     НЕ запущен (протухший лок, PID {st['pid']}, {st['age_s']:.0f}с назад)")
+    else:
+        print("Демон:     НЕ запущен (лок отсутствует)")
+    print(f"Режим:     {acfg.mode} | профиль {pcfgs.default_profile or '(roles)'} "
+          f"(analyst {a_spec}) | watch: {w.workflow}/{w.selection}, интервал {w.interval_s}с")
+    if b["budget"]:
+        print(f"Бюджет:    сегодня {b['spent']} {currency} из {b['budget']} {currency} "
+              f"(осталось {b['remaining']} {currency})")
+    else:
+        print(f"Бюджет:    сегодня потрачено {b['spent']} {currency} (дневной лимит не задан)")
+    print(f"Очередь:   ~{pending} задач(и) ждут анализа ({w.selection})"
+          if pending is not None else "Очередь:   н/д (нет связи с трекером)")
+    acts = ", ".join(f"{k}={v}" for k, v in sorted(summ["actions"].items())) or "—"
+    trust = ", ".join(f"{k}={v}" for k, v in summ["trust"].items()) or "—"
+    print(f"Сегодня:   {len(todays)} прогон(ов) | действия: {acts} | доверие: {trust}")
+    if summ["cost_by_currency"]:
+        print("           стоимость: " + "; ".join(f"{v} {c}" for c, v in summ["cost_by_currency"].items()))
+    last = rows[-5:]
+    if last:
+        print("Последние прогоны:")
+        for r in last:
+            tm = str(r.get("ts", ""))[11:16]
+            cost = f"{r.get('cost')} {r.get('currency', '')}".strip() if r.get("cost") is not None else "—"
+            trust_s = f"{r.get('trust', '?')}({r.get('confidence', '?')})" if r.get("trust") else "—"
+            print(f"  {tm}  {str(r.get('issue')):<10} {str(r.get('action')):<9} {trust_s:<18} {cost}")
+    authors = acfg.bugs.trigger_authors
+    print(f"Авторы триггеров: {len(authors)} — " + ", ".join(authors) if authors
+          else "Авторы триггеров: пусто (тег-триггер может ставить кто угодно)")
+    return 0
 
 
 def cmd_preflight(args) -> int:
@@ -460,6 +533,8 @@ def main(argv: list[str] | None = None) -> int:
     p_watch.add_argument("--vision", help="Роль vision: провайдер/модель; 'none' — отключить")
     p_watch.add_argument("--max-steps", type=int, dest="max_steps", help="Бюджет агентных шагов")
 
+    sub.add_parser("status", help="Текущее состояние: демон, бюджет, сегодняшняя активность")
+
     sub.add_parser("preflight", help="Самопроверка окружения и доступов")
 
     p_llm = sub.add_parser("llm-test", help="Проверка LLM-провайдеров (чат/JSON/tools/vision)")
@@ -489,6 +564,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run(args, "ft")
         if args.command == "watch":
             return cmd_watch(args)
+        if args.command == "status":
+            return cmd_status(args)
         if args.command == "preflight":
             return cmd_preflight(args)
         if args.command == "llm-test":
