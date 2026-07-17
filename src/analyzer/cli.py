@@ -215,7 +215,7 @@ def cmd_status(args) -> int:
 
     st = daemon_state(work / w.lock_file, now_ts, max(w.interval_s * 3, 120))
     try:
-        a_spec, _ = pcfgs.effective_roles()
+        a_spec, _ = pcfgs.effective_roles(w.profile or None)  # профиль демона (watch.profile), не дефолт
     except Exception:  # noqa: BLE001
         a_spec = pcfgs.roles.analyst
     try:
@@ -247,7 +247,7 @@ def cmd_status(args) -> int:
         print(f"Демон:     НЕ запущен (протухший лок, PID {st['pid']}, {st['age_s']:.0f}с назад)")
     else:
         print("Демон:     НЕ запущен (лок отсутствует)")
-    print(f"Режим:     {acfg.mode} | профиль {pcfgs.default_profile or '(roles)'} "
+    print(f"Режим:     {acfg.mode} | профиль {w.profile or pcfgs.default_profile or '(roles)'} "
           f"(analyst {a_spec}) | watch: {w.workflow}/{w.selection}, интервал {w.interval_s}с")
     if b["budget"]:
         print(f"Бюджет:    сегодня {b['spent']} {currency} из {b['budget']} {currency} "
