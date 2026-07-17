@@ -17,11 +17,11 @@ RUN uv sync --frozen --no-dev
 RUN uv sync --no-dev --directory vendor/onec-vecgraph
 
 ########################## runtime ##########################
-FROM python:3.12-slim AS runtime
-# git — для onec-lite changed_objects/review_set; ripgrep — ускоряет search_code (опционально).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ripgrep ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Полный python (не -slim): в нём УЖЕ есть git (для onec-lite changed_objects/review_set) и
+# ca-certificates, поэтому apt-get не нужен. Важно для этой сети: исходящий HTTP (порт 80) к
+# deb.debian.org закрыт (открыт только HTTPS/443 к dockerhub/pypi/github), apt по HTTP не работает.
+# ripgrep опущен (опционален) — search_code работает на pure-python fallback.
+FROM python:3.12 AS runtime
 
 # uv нужен в рантайме: анализатор спавнит onec-lite как `uv run --directory ... onec-lite stdio`.
 COPY --from=build /bin/uv /bin/uv
