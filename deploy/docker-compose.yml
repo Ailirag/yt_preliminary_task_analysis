@@ -28,6 +28,8 @@ services:
       - /mnt/storage/analyzer/dump:/data/dump:ro
       # прод-конфиг: копия config/analyzer.yaml с dump_path: /data/dump, mode: live, блоком watch.
       - /home/adm_garipov_ir/analyzer/config/analyzer.yaml:/app/config/analyzer.yaml:ro
+      # providers.yaml (профили/модели/тарифы) — тоже внешним файлом, чтобы правки не требовали пересборки.
+      - /home/adm_garipov_ir/analyzer/config/providers.yaml:/app/config/providers.yaml:ro
       # FTS-индекс (~1 ГБ) — переживает пересоздание контейнера (владелец 10001).
       - /mnt/storage/analyzer/onec-lite:/data/onec-lite
       # операционное состояние и данные компании (владелец 10001).

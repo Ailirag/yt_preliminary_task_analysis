@@ -5,7 +5,7 @@ roles:
   vision: zai/glm-4.6v
 
 # Готовые сценарии. Переключение одним флагом: --profile <имя>. По умолчанию — default_profile.
-default_profile: "z.ai"
+default_profile: "yandex"
 profiles:
   "z.ai":          # устоявшийся стек: весь z.ai (GLM-5 аналитик + GLM-4.6V vision)
     analyst: zai/glm-5
