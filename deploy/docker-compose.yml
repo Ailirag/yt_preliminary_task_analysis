@@ -17,7 +17,9 @@ services:
     restart: unless-stopped
     stop_grace_period: 600s          # docker stop шлёт SIGTERM -> демон доигрывает текущий разбор (~7 мин) и снимает лок
     env_file:
-      - /home/adm_garipov_ir/analyzer.env   # СЕКРЕТЫ (не в git): YATRACKER_TOKEN_GT, YATRACKER_ORGID_GT, ZAI_API_KEY (+ YANDEX_*)
+      # СЕКРЕТЫ (не в git): YATRACKER_TOKEN_GT, YATRACKER_ORGID_GT; ZAI_API_KEY и/или YANDEX_API_KEY+YANDEX_FOLDER_ID (LLM);
+      # CORP_GIT_CREDENTIALS — строка git credential-store (https://user:token@git.corp…) для клона приватных зеркал 1С.
+      - /home/adm_garipov_ir/analyzer.env
     # environment:                   # раскомментируйте, если исходящий доступ только через прокси
     #   HTTP_PROXY: "http://proxy.local:3128"
     #   HTTPS_PROXY: "http://proxy.local:3128"
@@ -51,8 +53,8 @@ services:
       - analyzer                     # порядок старта: analyzer делает первичный клон+FTS (не готовность)
     # Тот же образ и ENTRYPOINT (entrypoint.sh): первый аргумент `sync` включает роль сайдкара
     # (entrypoint настроит git-креды из CORP_GIT_CREDENTIALS и запустит onec-lite sync).
-    # --at HH:MM обновляет в заданные часы (ВНЕ пиков анализа) — чтобы pull не менял код под ногами
-    # агента посреди разбора; часы в UTC (нужен локальный — задайте TZ в environment). Пример: ночь и обед.
+    # --at HH:MM обновляет в заданные часы (в окна низкой активности) — чтобы pull не менял код под ногами
+    # агента посреди разбора; часы в UTC (05:00/12:00 UTC = 08:00/15:00 MSK; для локального времени задайте TZ).
     # Альтернатива по интервалу: command: ["sync", "--interval", "21600", "--pull"].
     command: ["sync", "--at", "05:00", "--at", "12:00", "--pull"]
     env_file:
