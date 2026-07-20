@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Init + запуск демона в одном контейнере:
-#   1) МУЛЬТИ-СИСТЕМА (config.systems заполнен): сгенерировать state-файл onec-lite, клонировать
-#      зеркала (sync --once) и построить FTS по КАЖДОМУ воркспейсу;
-#   2) ОДНО-ВОРКСПЕЙСНЫЙ режим (systems пуст): построить один FTS-индекс по $DUMP (как раньше);
-#   3) exec'нуть демон как console-script (PID получает SIGTERM от `docker stop` -> graceful).
+# Единый entrypoint для двух ролей (различаются первым аргументом = compose command):
+#   (без аргументов) — демон: init FTS-индексов + `analyzer watch --live`;
+#   sync [args...]    — сайдкар обновления зеркал: `onec-lite sync <args>`.
+# Общий шаг для обеих ролей — настройка git-кредов для приватных репозиториев 1С.
 set -euo pipefail
 
 DUMP="${ONEC_DUMP_PATH:-/data/dump}"
@@ -15,6 +14,24 @@ ANALYZER=/app/.venv/bin/analyzer
 VEC=(uv run --no-sync --directory vendor/onec-vecgraph onec-vecgraph)
 LITE=(uv run --no-sync --directory vendor/onec-vecgraph onec-lite)
 
+# --- git-креды для приватных зеркал 1С (значение только из env CORP_GIT_CREDENTIALS, в лог НЕ пишем) ---
+# Формат значения: строка(и) git credential-store, напр. https://user:token@git.corp.example
+# Пусто (публичные репозитории / одно-воркспейсный режим) — шаг пропускается.
+if [ -n "${CORP_GIT_CREDENTIALS:-}" ]; then
+  umask 077
+  printf '%s\n' "$CORP_GIT_CREDENTIALS" > "$HOME/.git-credentials"
+  git config --global credential.helper store
+  echo "[entrypoint] git-креды для corp-репозиториев настроены (helper store)."
+fi
+
+# --- роль sync-сайдкара: entrypoint.sh sync [--interval N | --at HH:MM ...] [--pull] ---
+if [ "${1:-}" = "sync" ]; then
+  shift
+  echo "[entrypoint] роль onec-sync: onec-lite sync $*"
+  exec "${LITE[@]}" sync "$@"
+fi
+
+# --- роль демона: построить индексы, затем запустить watch ---
 # Мульти-система? gen-workspaces пишет state-файл из config.systems (exit 0 = есть ≥1 воркспейс).
 if "$ANALYZER" gen-workspaces; then
   echo "[entrypoint] мульти-воркспейс: обновляю зеркала (onec-lite sync --once)…"

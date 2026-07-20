@@ -198,9 +198,13 @@ systems:
 Плановое обновление зеркал — сервис **`onec-sync`** (в этом compose): процесс `onec-lite sync`
 по расписанию `--at HH:MM` (окна ВНЕ пиков анализа, чтобы `pull` не менял код посреди разбора).
 FTS он не трогает — обслуживающий onec-lite внутри `analyzer` дообновляет индекс по mtime.
-Приватные репозитории: обеспечьте git-креды (токен в URL `repo`, `~/.git-credentials` в томе или
-`GIT_ASKPASS`) — onec-lite ходит в git неинтерактивно (`GIT_TERMINAL_PROMPT=0`), недоступный remote
-даёт быстрый отказ, а не зависание.
+
+**Приватные репозитории (git-креды):** задайте в `analyzer.env` переменную `CORP_GIT_CREDENTIALS`
+одной строкой формата git credential-store, напр. `CORP_GIT_CREDENTIALS=https://user:token@git.corp.example`.
+entrypoint (в обеих ролях — демон и `onec-sync`) запишет её в `~/.git-credentials` и включит
+`credential.helper store`; значение в логи не попадает. onec-lite ходит в git неинтерактивно
+(`GIT_TERMINAL_PROMPT=0`) — недоступный remote даёт быстрый отказ, а не зависание. Публичные
+репозитории: переменную не задавайте.
 
 Одна система (частый случай) = `systems: []` (по умолчанию): поведение как раньше, `onec-sync`
 не нужен — поднимайте только демон: `docker compose -f deploy/docker-compose.yml up -d analyzer`.

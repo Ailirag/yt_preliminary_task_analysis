@@ -47,14 +47,14 @@ services:
     restart: unless-stopped
     depends_on:
       - analyzer                     # порядок старта: analyzer делает первичный клон+FTS (не готовность)
-    # sync читает воркспейсы из ONEC_LITE_STATE (общий том); ONEC_LITE_STATE унаследован из образа.
+    # Тот же образ и ENTRYPOINT (entrypoint.sh): первый аргумент `sync` включает роль сайдкара
+    # (entrypoint настроит git-креды из CORP_GIT_CREDENTIALS и запустит onec-lite sync).
     # --at HH:MM обновляет в заданные часы (ВНЕ пиков анализа) — чтобы pull не менял код под ногами
     # агента посреди разбора; часы в UTC (нужен локальный — задайте TZ в environment). Пример: ночь и обед.
     # Альтернатива по интервалу: command: ["sync", "--interval", "21600", "--pull"].
-    entrypoint: ["uv", "run", "--no-sync", "--directory", "vendor/onec-vecgraph", "onec-lite"]
     command: ["sync", "--at", "05:00", "--at", "12:00", "--pull"]
     env_file:
-      - /home/adm_garipov_ir/analyzer.env   # на случай git-кредов/прокси для приватных репозиториев (LLM-ключи не используются)
+      - /home/adm_garipov_ir/analyzer.env   # ONEC_LITE_STATE (из образа) + CORP_GIT_CREDENTIALS для приватных зеркал
     volumes:
       # тот же том, что у analyzer: state-файл (config.json), зеркала (mirrors/) и FTS.
       - /mnt/storage/analyzer/onec-lite:/data/onec-lite
