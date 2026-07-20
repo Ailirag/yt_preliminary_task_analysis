@@ -43,6 +43,7 @@ watch:
   interval_s: 30                 # период опроса; тик дешёвый (сначала count), тяжёлый стек — только при наличии кандидатов
   workflow: bugs                 # bugs | ft
   selection: trigger-tag         # для демона безопаснее реагировать на осознанно помеченные задачи
+  profile: ""                    # профиль providers.yaml для демона (пусто = default_profile). Прод на Yandex: "yandex"
   daily_budget: null             # потолок стоимости за сутки в валюте аналитика ($/₽); null = без лимита. Пример: 5.0
   work_hours: ""                 # окно работы "08:00-20:00" (локальное время); пусто = круглосуточно
   lock_file: "analyzer.lock"     # single-instance lock (в paths.work_dir)
@@ -78,9 +79,11 @@ onec:
   # Путь к выгрузке конфигурации 1С УТ (git-репозиторий с XML Конфигуратора).
   # ЗАДАТЬ ПЕРЕД ПЕРВЫМ ПРОГОНОМ. Ревизия попадает в отчёт.
   dump_path: ""
-  # Команда запуска MCP-сервера onec-lite (stdio); {dump_path} подставляется из onec.dump_path
+  # Команда запуска MCP-сервера onec-lite (stdio); {dump_path} подставляется из onec.dump_path.
+  # --no-sync: venv вендора собран заранее (uv sync в образе/на машине) — не пересинхронизировать
+  # на каждый спавн (в Docker иначе ломается о виндовый cache-dir вендора и требует сети).
   command: "uv"
-  args: ["run", "--directory", "{vecgraph_dir}", "onec-lite", "stdio", "--root", "{dump_path}"]
+  args: ["run", "--no-sync", "--directory", "{vecgraph_dir}", "onec-lite", "stdio", "--root", "{dump_path}"]
   env: {}                         # доп. переменные ONEC_LITE_* при необходимости
   # Белый список инструментов для LLM (пусто = все 29). Имена сняты с onec-lite.
   tool_whitelist:

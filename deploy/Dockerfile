@@ -45,6 +45,7 @@ RUN mkdir -p /data/dump /data/onec-lite /app/work /app/journal \
 ENV ONEC_LITE_STATE=/data/onec-lite/config.json \
     ONEC_DUMP_PATH=/data/dump \
     UV_LINK_MODE=copy \
+    UV_CACHE_DIR=/tmp/uv-cache \
     PYTHONUNBUFFERED=1
 
 USER app
