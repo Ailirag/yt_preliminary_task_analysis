@@ -592,6 +592,27 @@ def dump_revision(dump_path: str) -> str:
     return "не git-репозиторий / ревизия неизвестна"
 
 
+def workspace_revisions(ctx: "RunContext") -> str:
+    """Ревизии кода для шапки отчёта. Мульти-режим: по каждому целевому воркспейсу (зеркало
+    mirrors/<ws> либо его локальный root); одно-воркспейсный режим: по onec.dump_path."""
+    if not ctx.onec_workspaces:
+        return dump_revision(ctx.acfg.onec.dump_path)
+    from .systems import state_file_path
+    mirrors = state_file_path(ctx.acfg.onec.env.get("ONEC_LITE_STATE")).parent / "mirrors"
+    by_ws = {s.workspace: s for s in ctx.acfg.systems}
+    parts: list[str] = []
+    for ws in ctx.onec_workspaces:
+        s = by_ws.get(ws)
+        if s and (s.repo or "").strip():
+            path = str(mirrors / ws)
+        elif s and (s.root or "").strip():
+            path = s.root
+        else:
+            path = ""
+        parts.append(f"{ws}: {dump_revision(path) if path else 'путь неизвестен'}")
+    return "; ".join(parts)
+
+
 def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
                   result: AnalysisResult, force: bool = False) -> tuple[str, str | None]:
     """Возвращает (action, subtask_key). force -> новая версия unique (создать свежую подзадачу)."""
@@ -841,7 +862,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         date=datetime.now().strftime("%Y-%m-%d %H:%M"),
         models=(ctx.analyst.label() + (f" + vision {ctx.vision.label()}"
                                        if (ctx.vision and ctx.vision_calls > 0) else "")),
-        dump_rev=dump_revision(ctx.acfg.onec.dump_path),
+        dump_rev=workspace_revisions(ctx),
         disclaimer=ctx.acfg.report.disclaimer,
         verdict=verdict,
         stats=stats,

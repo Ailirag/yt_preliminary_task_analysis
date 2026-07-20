@@ -104,15 +104,17 @@ def _target_systems_section(target_systems: list[tuple[str, str]] | None) -> str
     target_systems — список (workspace, human_name). Пусто/None -> секции нет (одно-воркспейсный режим)."""
     if not target_systems:
         return ""
+    names = ", ".join(f"`{ws}`" for ws, _ in target_systems)
     if len(target_systems) == 1:
         ws, name = target_systems[0]
-        return (f"Целевая система 1С для этой задачи — «{name}» (воркспейс `{ws}`). Инструменты кода "
-                f"уже настроены на неё; параметр workspace можно не указывать.")
-    listing = "; ".join(f"«{name}» (воркспейс `{ws}`)" for ws, name in target_systems)
+        return (f"Целевая система 1С для этой задачи — «{name}» (воркспейс `{ws}`), она уже выбрана "
+                f"по умолчанию. НЕ передавай параметр workspace в вызовах инструментов кода (в частности, "
+                f"НЕ указывай workspace=\"default\") — все вызовы и так идут по этой системе.")
+    listing = "; ".join(f"«{name}» — `{ws}`" for ws, name in target_systems)
     return ("Задача затрагивает НЕСКОЛЬКО систем 1С (интеграция): " + listing + ". "
-            "В КАЖДОМ вызове инструмента кода указывай параметр `workspace=<имя>` той системы, код которой "
-            "смотришь (без него берётся первая из списка). Сопоставляй объекты и вызовы правильной системе, "
-            "не смешивай их.")
+            f"В КАЖДОМ вызове инструмента кода указывай workspace=<имя>, используя ТОЛЬКО эти имена: {names}. "
+            "НЕ используй workspace=\"default\" или другие значения. Сопоставляй объекты правильной "
+            "системе, не смешивай их.")
 
 
 def bug_system_prompt(max_steps: int, code_tools: bool, nav_tools: bool,
