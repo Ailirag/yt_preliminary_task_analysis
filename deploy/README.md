@@ -164,6 +164,18 @@ watch:
   daily_budget: 5.0              # потолок в валюте аналитика ($ для профиля z.ai); null — без лимита
   work_hours: "08:00-20:00"
 ```
+Для первой проверки поставьте `mode: dry-run` (запись в трекер выключена), убедитесь в работе,
+затем переключите на `mode: live`.
+
+### Вендорный onec-vecgraph (ОБЯЗАТЕЛЬНО перед сборкой)
+`vendor/` — в `.gitignore`, поэтому в свежем клоне репозитория onec-vecgraph нет, и `docker build`
+упадёт с `No such file or directory` на шаге `uv sync --directory vendor/onec-vecgraph`.
+Склонировать его в `vendor/` внутри контекста сборки:
+```bash
+git clone --depth 1 https://github.com/Ailirag/onec-vecgraph \
+  /home/adm_garipov_ir/analyzer/vendor/onec-vecgraph
+```
+Обновляется тем же `git pull` в этом каталоге.
 
 ## Сборка и запуск
 ```bash

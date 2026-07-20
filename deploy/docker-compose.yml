@@ -8,6 +8,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      # ВАЖНО: перед сборкой склонируйте onec-vecgraph в vendor/ (он в .gitignore, в клоне его нет):
+      #   git clone --depth 1 https://github.com/Ailirag/onec-vecgraph vendor/onec-vecgraph
+      # иначе build упадёт на `uv sync --directory vendor/onec-vecgraph`. См. deploy/README.md.
     image: tracker-analyzer:latest
     container_name: tracker-analyzer
     init: true                       # tini как PID 1: пробрасывает SIGTERM, собирает зомби
