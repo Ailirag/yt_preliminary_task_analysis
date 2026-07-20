@@ -167,6 +167,44 @@ watch:
 Для первой проверки поставьте `mode: dry-run` (запись в трекер выключена), убедитесь в работе,
 затем переключите на `mode: live`.
 
+### Мульти-система (несколько систем 1С) — опционально
+
+По умолчанию анализатор работает с одной выгрузкой (`onec.dump_path` → `/data/dump`). Чтобы
+анализировать задачи по НЕСКОЛЬКИМ системам (УТ, ERP, …), заполните `systems` в `analyzer.yaml`
+и очистите `dump_path`:
+```yaml
+onec:
+  dump_path: ""          # ВАЖНО: пусто -> onec-lite берёт воркспейсы из state-файла, а не --root
+systems:
+  - name: "Управление Торговлей"
+    workspace: "ut"
+    repo: "https://git.corp.grandtrade.world/1c/ut_prod.git"   # зеркало (прод)
+    branch: "main"
+    components: ["УТ"]              # компоненты трекера, указывающие на систему
+    aliases: ["УТ", "торговля"]
+  - name: "ERP"
+    workspace: "erp"
+    repo: "https://git.corp.grandtrade.world/1c/erp.git"
+    components: ["ERP"]
+```
+На прод-контейнере всё разворачивается автоматически (`deploy/entrypoint.sh`):
+1. `analyzer gen-workspaces` пишет state-файл onec-lite (`/data/onec-lite/config.json`) из `systems`;
+2. `onec-lite sync --once` клонирует зеркала в `/data/onec-lite/mirrors/<workspace>`;
+3. FTS строится по КАЖДОМУ воркспейсу (маркер `.indexed-<имя>` пропускает готовые при рестарте);
+4. демон стартует; для каждой задачи LLM-минизапуск определяет систему(ы) по описанию+компонентам
+   и подставляет `workspace=` в вызовы кода. Если систему определить нельзя — в задачу пишется
+   `no_system_comment` и ставится `skip_tag` (демон её больше не выбирает).
+
+Плановое обновление зеркал — сервис **`onec-sync`** (в этом compose): процесс `onec-lite sync`
+по расписанию `--at HH:MM` (окна ВНЕ пиков анализа, чтобы `pull` не менял код посреди разбора).
+FTS он не трогает — обслуживающий onec-lite внутри `analyzer` дообновляет индекс по mtime.
+Приватные репозитории: обеспечьте git-креды (токен в URL `repo`, `~/.git-credentials` в томе или
+`GIT_ASKPASS`) — onec-lite ходит в git неинтерактивно (`GIT_TERMINAL_PROMPT=0`), недоступный remote
+даёт быстрый отказ, а не зависание.
+
+Одна система (частый случай) = `systems: []` (по умолчанию): поведение как раньше, `onec-sync`
+не нужен — поднимайте только демон: `docker compose -f deploy/docker-compose.yml up -d analyzer`.
+
 ### Вендорный onec-vecgraph (ОБЯЗАТЕЛЬНО перед сборкой)
 `vendor/` — в `.gitignore`, поэтому в свежем клоне репозитория onec-vecgraph нет, и `docker build`
 упадёт с `No such file or directory` на шаге `uv sync --directory vendor/onec-vecgraph`.

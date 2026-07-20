@@ -1,7 +1,8 @@
 """REST-клиент Yandex Tracker c write-guard.
 
 Правила записи (write-guard):
-  1. Существующие задачи: разрешено ТОЛЬКО добавление/удаление тегов.
+  1. Существующие задачи: из изменений ПОЛЕЙ разрешено ТОЛЬКО добавление/удаление тегов.
+     Дополнительно разрешён комментарий (add_comment) — неразрушающая операция, полей не меняет.
   2. Создание задач: только подзадача с компонентой «ИИ анализ» и unique-ключом.
   3. Полный доступ (описание и пр.) — только к задачам, созданным в ТЕКУЩЕМ прогоне.
 Любая запись выполняется только в live-режиме; в dry-run намерение пишется в журнал.
@@ -223,6 +224,26 @@ class TrackerClient:
         if self.journal:
             self.journal.write_event(op="update_tags", issue=key, payload=payload, dry_run=False)
         log.info("Теги обновлены: %s %s", key, tags)
+        return result
+
+    def add_comment(self, key: str, text: str):
+        """Добавить комментарий к задаче (POST /v2/issues/{key}/comments).
+
+        Разрешено для СУЩЕСТВУЮЩИХ задач: комментарий — неразрушающая операция, полей задачи не
+        меняет, поэтому _guard_tags_only (он про PATCH полей) здесь неприменим и не вызывается.
+        Как и любая запись — только в live; в dry-run намерение пишется в журнал."""
+        if not text or not text.strip():
+            return None
+        payload = {"text": text}
+        if not self.live:
+            log.info("[DRY-RUN] POST %s/comments (%d симв.)", key, len(text))
+            if self.journal:
+                self.journal.write_event(op="add_comment", issue=key, payload=payload, dry_run=True)
+            return DryRunResult("dry-run")
+        result = self._json("POST", f"/v2/issues/{key}/comments", json=payload)
+        if self.journal:
+            self.journal.write_event(op="add_comment", issue=key, payload=payload, dry_run=False)
+        log.info("Комментарий добавлен: %s (%d симв.)", key, len(text))
         return result
 
     def create_subtask(

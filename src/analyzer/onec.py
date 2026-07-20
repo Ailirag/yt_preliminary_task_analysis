@@ -113,6 +113,15 @@ class OnecMCP:
     def all_tool_names(self) -> list[str]:
         return [t.name for t in self._tools_raw]
 
+    def accepts_workspace(self, name: str) -> bool:
+        """True, если инструмент объявляет параметр workspace (его можно адресовать воркспейсу).
+        Инструменты без workspace (напр. list_workspaces, справка платформы) не трогаем."""
+        for t in self._tools_raw:
+            if t.name == name:
+                props = (t.inputSchema or {}).get("properties") or {}
+                return "workspace" in props
+        return False
+
     def call(self, name: str, args: dict, max_chars: int = 20000) -> str:
         """Синхронный вызов инструмента; ошибки возвращаются текстом (модель их видит)."""
         if not self.available:

@@ -55,3 +55,14 @@ def test_finish_iteration_clears_created_registry():
     tc.finish_iteration()
     with pytest.raises(WriteGuardError):
         tc.patch_created_issue("ONE-9", {"description": "x"})
+
+
+def test_add_comment_dry_run_returns_marker_without_network():
+    tc = _client()
+    # комментарий к ЛЮБОЙ существующей задаче разрешён (не проходит _guard_tags_only, суб-ресурс)
+    assert isinstance(tc.add_comment("ONE-1", "Анализ невозможен: система не установлена"), DryRunResult)
+
+
+def test_add_comment_empty_text_is_noop():
+    tc = _client()
+    assert tc.add_comment("ONE-1", "   ") is None

@@ -26,3 +26,11 @@ def test_ft_uses_trigger_tag():
     q = build_query(acfg, "ft", "n/a")
     assert f'Tags: "{acfg.ft.trigger_tag}"' in q
     assert f"Queue: {acfg.queue}" in q
+
+
+def test_query_excludes_skip_tag():
+    """Гейт мульти-системы: помеченные skip_tag задачи исключаются из выборки (bugs и ft)."""
+    acfg, _ = load_configs()
+    assert acfg.skip_tag  # по умолчанию непустой
+    for wf, sel in (("bugs", "trigger-tag"), ("bugs", "no-done-tag"), ("ft", "n/a")):
+        assert f'Tags: !"{acfg.skip_tag}"' in build_query(acfg, wf, sel)

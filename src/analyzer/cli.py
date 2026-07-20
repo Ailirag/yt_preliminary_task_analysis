@@ -479,6 +479,27 @@ def cmd_init_component(args) -> int:
         tracker.close()
 
 
+def cmd_gen_workspaces(args) -> int:
+    """Сгенерировать state-файл onec-lite (мульти-воркспейс) из config.systems."""
+    from .systems import write_state_file
+    acfg, _ = load_configs(getattr(args, "config", None))
+    if not acfg.systems:
+        print("systems в config/analyzer.yaml пуст — нечего генерировать "
+              "(одно-воркспейсный режим: onec-lite работает по onec.dump_path).")
+        return 1
+    path, n, warnings = write_state_file(acfg, getattr(args, "state", None))
+    for w in warnings:
+        print(f"  ВНИМАНИЕ: {w}")
+    print(f"State-файл onec-lite записан: {path} — воркспейсов: {n}")
+    for s in acfg.systems:
+        kind = "зеркало" if (s.repo or "").strip() else ("путь" if (s.root or "").strip() else "—")
+        print(f"  {s.workspace}: {kind} {s.repo or s.root or '(нет источника)'}")
+    if n == 0:
+        print("Ни один воркспейс не сгенерирован — заполните repo или root у систем.")
+        return 1
+    return 0
+
+
 # ---------- парсер ----------
 
 def _add_run_args(p: argparse.ArgumentParser, with_selection: bool) -> None:
@@ -550,6 +571,10 @@ def main(argv: list[str] | None = None) -> int:
     p_init = sub.add_parser("init-component", help="Создать компоненту «ИИ анализ» в очереди")
     p_init.add_argument("--yes", action="store_true", help="Без интерактивного подтверждения")
 
+    p_gen = sub.add_parser("gen-workspaces",
+                           help="Сгенерировать state-файл onec-lite из config.systems (мульти-воркспейс)")
+    p_gen.add_argument("--state", help="Путь к state-файлу (по умолч. env ONEC_LITE_STATE / ~/.onec-lite/config.json)")
+
     args = parser.parse_args(argv)
     # Windows: консоль/редирект могут быть в cp866/cp1251 — пишем UTF-8 устойчиво
     for stream in (sys.stdout, sys.stderr):
@@ -577,6 +602,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_llm_test(args)
         if args.command == "init-component":
             return cmd_init_component(args)
+        if args.command == "gen-workspaces":
+            return cmd_gen_workspaces(args)
         parser.error("неизвестная команда")
         return 2
     except KeyboardInterrupt:

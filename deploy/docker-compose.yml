@@ -33,3 +33,28 @@ services:
       # операционное состояние и данные компании (владелец 10001).
       - /mnt/storage/analyzer/work:/app/work
       - /mnt/storage/analyzer/journal:/app/journal
+    # МУЛЬТИ-СИСТЕМА: при заполненном config.systems (+ onec.dump_path: "") entrypoint сам сгенерирует
+    # state-файл, склонирует зеркала в /data/onec-lite/mirrors и построит FTS по каждому воркспейсу;
+    # том /data/dump тогда не используется (можно оставить смонтированным — безвредно).
+
+  # Плановое обновление зеркал 1С (только для мульти-системы): отдельный процесс onec-lite sync.
+  # Держит рабочие копии свежими; FTS НЕ строит — обслуживающий onec-lite внутри analyzer сам
+  # дообновляет индекс по mtime. При пустом config.systems сервис не нужен (idle: «нет воркспейсов»).
+  onec-sync:
+    image: tracker-analyzer:latest
+    container_name: tracker-onec-sync
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - analyzer                     # порядок старта: analyzer делает первичный клон+FTS (не готовность)
+    # sync читает воркспейсы из ONEC_LITE_STATE (общий том); ONEC_LITE_STATE унаследован из образа.
+    # --at HH:MM обновляет в заданные часы (ВНЕ пиков анализа) — чтобы pull не менял код под ногами
+    # агента посреди разбора; часы в UTC (нужен локальный — задайте TZ в environment). Пример: ночь и обед.
+    # Альтернатива по интервалу: command: ["sync", "--interval", "21600", "--pull"].
+    entrypoint: ["uv", "run", "--no-sync", "--directory", "vendor/onec-vecgraph", "onec-lite"]
+    command: ["sync", "--at", "05:00", "--at", "12:00", "--pull"]
+    env_file:
+      - /home/adm_garipov_ir/analyzer.env   # на случай git-кредов/прокси для приватных репозиториев (LLM-ключи не используются)
+    volumes:
+      # тот же том, что у analyzer: state-файл (config.json), зеркала (mirrors/) и FTS.
+      - /mnt/storage/analyzer/onec-lite:/data/onec-lite

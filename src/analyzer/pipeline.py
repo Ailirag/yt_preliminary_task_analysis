@@ -16,7 +16,7 @@ from .llm.base import truncate
 from .models import AnalysisResult, normalize_analysis
 from .verdict import score_result
 from .onec import OnecMCP
-from .prompts import VISION_PROMPT, bug_system_prompt, ft_system_prompt
+from .prompts import VISION_PROMPT, bug_system_prompt, ft_system_prompt, system_detect_prompt
 from .report import render_report
 from .tracker import TrackerClient
 from .users import UserMap
@@ -49,6 +49,7 @@ class RunContext:
     vision_calls: int = 0                                 # обращений к vision в рамках текущего анализа
     nav_log: list = field(default_factory=list)           # след навигации (для отчёта/журнала)
     related_cache: dict = field(default_factory=dict)     # ключ задачи -> готовый текст (кэш на прогон)
+    onec_workspaces: list = field(default_factory=list)   # целевые воркспейсы текущей задачи (мульти-система)
 
     def add_usage(self, role: str, usage: dict) -> None:
         bucket = self.usage.setdefault(
@@ -70,6 +71,7 @@ class RunContext:
         self.vision_calls = 0
         self.nav_log.clear()
         self.related_cache.clear()
+        self.onec_workspaces = []
         self.journal.run_id = run_id
 
 
@@ -77,15 +79,18 @@ class RunContext:
 
 def build_query(acfg: AnalyzerCfg, workflow: str, selection: str) -> str:
     q = acfg.queue
+    # исключаем задачи, помеченные как «система не определена» (гейт мульти-системы), чтобы демон
+    # не перевыбирал их каждый тик; пусто = не фильтруем.
+    skip = f' Tags: !"{acfg.skip_tag}"' if acfg.skip_tag else ""
     if workflow == "bugs":
         b = acfg.bugs
         if selection == "trigger-tag":
             return (f'Queue: {q} Type: Ошибка Resolution: empty() '
-                    f'Tags: "{b.trigger_tag}" Tags: !"{b.done_tag}" "Sort by": Updated ASC')
+                    f'Tags: "{b.trigger_tag}" Tags: !"{b.done_tag}"{skip} "Sort by": Updated ASC')
         return (f'Queue: {q} Type: Ошибка Resolution: empty() '
-                f'Tags: !"{b.done_tag}" "Sort by": Updated ASC')
+                f'Tags: !"{b.done_tag}"{skip} "Sort by": Updated ASC')
     f = acfg.ft
-    return f'Queue: {q} Resolution: empty() Tags: "{f.trigger_tag}" "Sort by": Updated ASC'
+    return f'Queue: {q} Resolution: empty() Tags: "{f.trigger_tag}"{skip} "Sort by": Updated ASC'
 
 
 def _tag_ids(raw) -> set[str]:
@@ -160,6 +165,8 @@ def select_issues(ctx: RunContext, workflow: str, selection: str, limit: int,
     out: list[dict] = []
     for issue in raw:
         tags = issue.get("tags") or []
+        if ctx.acfg.skip_tag and ctx.acfg.skip_tag in tags:
+            continue  # «система не определена» — пропускаем (YQL уже фильтрует, это подстраховка)
         if workflow == "bugs":
             b = ctx.acfg.bugs
             type_key = ((issue.get("type") or {}).get("key") or "").lower()
@@ -484,11 +491,26 @@ def _dispatch_navigation(ctx: RunContext, name: str, args: dict) -> str:
     return f"[неизвестный инструмент {name}]"
 
 
+def _route_workspace(ctx: RunContext, name: str, args: dict) -> dict:
+    """Мульти-система: подставляет workspace= в onec-вызов по целевым системам задачи.
+    Агент может выбрать любую из целевых; вне списка/без указания -> первая целевая.
+    Ничего не трогаем, если целей нет (одно-воркспейсный режим) или инструмент не принимает workspace."""
+    targets = ctx.onec_workspaces
+    if not targets or not (ctx.onec and ctx.onec.accepts_workspace(name)):
+        return args
+    requested = str(args.get("workspace") or "").strip()
+    ws = requested if requested in targets else targets[0]
+    if ws == args.get("workspace"):
+        return args
+    return {**args, "workspace": ws}
+
+
 def dispatch_tool(ctx: RunContext, name: str, args: dict) -> str:
     """Роутер: навигация (трекер/вики) — локально, остальное — в MCP кода 1С."""
     if name in _NAV_TOOLS:
         return _dispatch_navigation(ctx, name, args)
     if ctx.onec and ctx.onec.available:
+        args = _route_workspace(ctx, name, args)
         return ctx.onec.call(name, args, ctx.acfg.limits.max_tool_result_chars)
     return f"[инструмент {name} недоступен]"
 
@@ -630,6 +652,52 @@ def _rub_cost(tin: int, tout: int, cached: int, tool: int, prices: tuple) -> flo
     return round(fresh / unit * pin + cached / unit * pc + tool / unit * pt + tout / unit * pout, 2)
 
 
+def determine_target_systems(ctx: RunContext, issue: dict) -> list[str]:
+    """Минизапуск: по теме+описанию+компонентам определить целевые воркспейсы onec-lite.
+    Дешёвый LLM-вызов без инструментов (токены -> usage['analyst']). Возвращает список валидных
+    имён воркспейсов из ctx.acfg.systems; пусто = систему определить не удалось. Имена/синонимы/
+    компоненты сопоставляются к workspace (модель может вернуть не строго workspace)."""
+    systems = ctx.acfg.systems
+    if not systems:
+        return []
+    key = issue["key"]
+    lookup: dict[str, str] = {}
+    for s in systems:
+        for tok in [s.workspace, s.name, *s.aliases]:
+            if tok and str(tok).strip():
+                lookup[str(tok).strip().lower()] = s.workspace
+
+    # components могут отсутствовать в проекции поиска — дочитываем полную задачу (кандидатов мало)
+    components = issue.get("components")
+    if components is None:
+        try:
+            components = ctx.tracker.get_issue(key).get("components")
+        except Exception as e:  # noqa: BLE001
+            log.warning("  %s: не удалось дочитать компоненты (%s)", key, e)
+            components = []
+    comp_names = [(c.get("display") or c.get("name") or "").strip() for c in (components or [])]
+    comp_names = [c for c in comp_names if c]
+
+    user = [f"Тема: {issue.get('summary', '')}",
+            "Компоненты задачи: " + (", ".join(comp_names) if comp_names else "(нет)"),
+            "\nОписание:\n" + truncate(issue.get("description") or "(пусто)", 6000, "описание усечено")]
+    try:
+        resp = ctx.analyst.chat([Msg.system(system_detect_prompt(systems)), Msg.user("\n".join(user))])
+        ctx.add_usage("analyst", resp.usage)
+    except Exception as e:  # noqa: BLE001
+        log.warning("  %s: минизапуск определения системы не удался (%s) — система не определена", key, e)
+        return []
+    data = extract_json(resp.text)
+    raw = data.get("systems") if isinstance(data, dict) else None
+    out: list[str] = []
+    for w in (raw or []):
+        ws = lookup.get(str(w).strip().lower())
+        if ws and ws not in out:
+            out.append(ws)
+    log.info("  минизапуск: целевые системы -> %s", ", ".join(out) if out else "(не определены)")
+    return out
+
+
 def process_issue(ctx: RunContext, issue: dict, workflow: str,
                   idx: int = 1, total: int = 1, force: bool = False) -> dict:
     key = issue["key"]
@@ -655,6 +723,20 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         if not (issue.get(ctx.acfg.wiki.doc_field) or "").strip():
             log.warning("%s: поле «Ссылка на документацию» пусто — пропуск", key)
             return {"issue": key, "action": "skipped-no-doclink"}
+
+    # мульти-система: минизапуск определяет целевой воркспейс(ы) до тяжёлого досье/анализа.
+    # systems пусто -> гейт неактивен (прежнее одно-воркспейсное поведение).
+    ctx.onec_workspaces = []
+    if ctx.acfg.systems:
+        targets = determine_target_systems(ctx, issue)
+        if not targets:
+            log.warning("%s: целевую систему определить не удалось — комментарий + тег %r, пропуск",
+                        key, ctx.acfg.skip_tag)
+            ctx.tracker.add_comment(key, ctx.acfg.no_system_comment)
+            if ctx.acfg.skip_tag:
+                ctx.tracker.update_tags(key, add=[ctx.acfg.skip_tag])
+            return {"issue": key, "action": "skipped-no-system"}
+        ctx.onec_workspaces = targets
 
     dossier, images, sources = build_dossier(ctx, issue, workflow)
     log.info("  досье: комментариев %d, картинок %d, вики-страниц %d",
@@ -686,11 +768,16 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
     current_queue = key.split("-", 1)[0] if "-" in key else ctx.acfg.queue
     allowed_queues = ctx.acfg.navigation.allowed_queues or [ctx.acfg.queue]
     prompt_fn = bug_system_prompt if workflow == "bugs" else ft_system_prompt
+    target_systems = None
+    if ctx.onec_workspaces:
+        by_ws = {s.workspace: s.name for s in ctx.acfg.systems}
+        target_systems = [(w, by_ws.get(w, w)) for w in ctx.onec_workspaces]
     system_prompt = prompt_fn(ctx.max_steps,
                               code_tools=bool(onec_specs) and supports,
                               nav_tools=bool(nav_specs) and supports,
                               current_queue=current_queue,
-                              allowed_queues=allowed_queues)
+                              allowed_queues=allowed_queues,
+                              target_systems=target_systems)
 
     kinds = []
     if onec_specs and supports:

@@ -132,6 +132,18 @@ class WatchCfg(BaseModel):
     max_backoff_s: int = 900
 
 
+class SystemCfg(BaseModel):
+    """Одна целевая система 1С = один воркспейс onec-lite. Единый источник правды: из него
+    следует и маппинг для минизапуска (name/aliases/components), и state-файл onec-lite (repo|root)."""
+    name: str                                            # человекочитаемое имя (для промпта минизапуска)
+    workspace: str                                       # имя воркспейса onec-lite (join-ключ)
+    repo: str = ""                                       # git-URL зеркала (прод): onec-lite клонирует в mirrors/<workspace>
+    branch: str = ""                                     # ветка зеркала (пусто = дефолтная)
+    root: str = ""                                       # ИЛИ локальный путь к выгрузке (dev); repo приоритетнее
+    components: list[str] = Field(default_factory=list)  # компоненты трекера (display) -> эта система
+    aliases: list[str] = Field(default_factory=list)     # подсказки распознавания системы для LLM
+
+
 class AnalyzerCfg(BaseModel):
     queue: str
     component_name: str
@@ -146,6 +158,13 @@ class AnalyzerCfg(BaseModel):
     paths: PathsCfg
     navigation: NavigationCfg = Field(default_factory=NavigationCfg)
     watch: WatchCfg = Field(default_factory=WatchCfg)
+    # Мульти-система: список целевых систем 1С. Пусто = старое одно-воркспейсное поведение
+    # (минизапуск-гейт не применяется). Порядок важен: первая — активный воркспейс по умолчанию.
+    systems: list[SystemCfg] = Field(default_factory=list)
+    skip_tag: str = "ИИ_анализ_невозможен"               # ставится, если целевую систему определить нельзя
+    no_system_comment: str = ("Анализ невозможен: невозможно установить целевую систему анализа. "
+                              "Укажите систему 1С в описании задачи или добавьте компоненту, "
+                              "указывающую на систему.")
 
 
 # ---------- providers.yaml ----------
