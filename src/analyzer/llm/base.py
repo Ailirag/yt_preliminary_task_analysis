@@ -3,10 +3,34 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+
+log = logging.getLogger("analyzer.llm")
+
+
+class RateLimitExhausted(Exception):
+    """Лимит API (HTTP 429) не снялся после всех попыток ретрая — вызов LLM невозможен.
+    Ловится в пайплайне и ЧЕСТНО фиксируется в создаваемой подзадаче (анализ не выполнен)."""
+
+    def __init__(self, attempts: int, last: BaseException | None = None):
+        self.attempts = attempts
+        self.last = last
+        super().__init__(f"лимит API (429) не снят после {attempts} попыток: {last}")
+
+
+def is_rate_limit_error(e: BaseException) -> bool:
+    """429 у любого SDK: по коду статуса, имени класса (RateLimitError) или тексту."""
+    if getattr(e, "status_code", None) == 429 or getattr(e, "code", None) == 429:
+        return True
+    if "ratelimit" in type(e).__name__.lower():
+        return True
+    msg = str(e).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg
 
 
 @dataclass
@@ -77,10 +101,32 @@ class Provider(ABC):
     supports_tools: bool = True
     force_first_tool: bool = False   # принудительный tool_choice=required на первом ходу
 
+    RATE_LIMIT_RETRIES = 5           # попыток при 429 (поверх ретраев SDK)
+    RATE_LIMIT_SLEEP_S = 5           # пауза между попытками, сек
+
     @abstractmethod
+    def _chat_once(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
+                   tool_choice: str | None = None) -> LLMResponse:
+        """Один вызов провайдера (без ретрая). Реализуется наследниками."""
+        ...
+
     def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
              tool_choice: str | None = None) -> LLMResponse:
-        ...
+        """Вызов LLM с ретраем при 429: RATE_LIMIT_RETRIES попыток, пауза RATE_LIMIT_SLEEP_S с.
+        Если лимит так и не снят — RateLimitExhausted (наверх, где это фиксируется в подзадаче)."""
+        last: BaseException | None = None
+        for attempt in range(1, self.RATE_LIMIT_RETRIES + 1):
+            try:
+                return self._chat_once(messages, tools=tools, tool_choice=tool_choice)
+            except Exception as e:  # noqa: BLE001
+                if not is_rate_limit_error(e):
+                    raise
+                last = e
+                if attempt < self.RATE_LIMIT_RETRIES:
+                    log.warning("%s: лимит API (429), попытка %d/%d — пауза %dс и повтор",
+                                self.label(), attempt, self.RATE_LIMIT_RETRIES, self.RATE_LIMIT_SLEEP_S)
+                    time.sleep(self.RATE_LIMIT_SLEEP_S)
+        raise RateLimitExhausted(self.RATE_LIMIT_RETRIES, last)
 
     def label(self) -> str:
         return f"{self.name}/{self.model}"

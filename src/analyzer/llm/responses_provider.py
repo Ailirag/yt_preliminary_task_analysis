@@ -98,8 +98,8 @@ class OpenAIResponsesProvider(Provider):
 
     # ---------- вызов ----------
 
-    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
-             tool_choice: str | None = None) -> LLMResponse:
+    def _chat_once(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
+                   tool_choice: str | None = None) -> LLMResponse:
         instructions, input_items = self._to_input(messages)
         kwargs: dict = {
             "model": self._wire_model,

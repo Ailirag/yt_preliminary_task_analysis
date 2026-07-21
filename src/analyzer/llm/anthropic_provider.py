@@ -85,8 +85,8 @@ class AnthropicProvider(Provider):
 
     # ---------- вызов ----------
 
-    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
-             tool_choice: str | None = None) -> LLMResponse:
+    def _chat_once(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
+                   tool_choice: str | None = None) -> LLMResponse:
         system_text, api_messages = self._translate(messages)
         kwargs: dict = {
             "model": self.model,

@@ -15,7 +15,7 @@ from pathlib import Path
 from .budget import DailyCounts, DailySpend
 from .config import AnalyzerCfg, ProvidersCfg
 from .journal import Journal, now_iso
-from .llm import ImagePart, Msg, Provider, ToolSpec, extract_json
+from .llm import ImagePart, Msg, Provider, RateLimitExhausted, ToolSpec, extract_json
 from .llm.base import truncate
 from .models import AnalysisResult, normalize_analysis
 from .verdict import score_result
@@ -655,6 +655,29 @@ def workspace_revisions(ctx: "RunContext") -> str:
     return "; ".join(parts)
 
 
+def _create_ai_subtask(ctx: RunContext, workflow: str, issue: dict, markdown: str) -> str:
+    """Создать ИИ-подзадачу с номером версии (vN) и unique по run_id. Общий код для обычного
+    разбора и честной заглушки при лимитах API."""
+    key = issue["key"]
+    wf = ctx.acfg.bugs if workflow == "bugs" else ctx.acfg.ft
+    queue = (issue.get("queue") or {}).get("key") or ctx.acfg.queue
+    parent_summary = truncate(issue.get("summary", ""), 90, "")
+    # номер версии = (число уже существующих ИИ-подзадач этого воркфлоу) + 1. Best-effort: поиск
+    # Трекера eventually-consistent, может занизить — тогда номер повторится (косметика, не коллизия).
+    version = ctx.tracker.count_ai_subtasks(key, ctx.acfg.component_name, wf.subtask.summary_prefix) + 1
+    vsuffix = f" (v{version})" if version > 1 else ""
+    return ctx.tracker.create_subtask(
+        queue=queue,
+        parent=key,
+        summary=f"{wf.subtask.summary_prefix}{key}: {parent_summary}{vsuffix}",
+        description=markdown,
+        issue_type=wf.subtask.type,
+        component_id=ctx.component_id,
+        # unique по run_id -> каждый разбор = отдельная подзадача (переразбор не теряется из-за 409).
+        unique=f"{wf.subtask.unique_prefix}-{key}-{ctx.journal.run_id}",
+    )
+
+
 def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
                   result: AnalysisResult) -> tuple[str, str | None]:
     """Возвращает (action, subtask_key). Каждый разбор создаёт отдельную подзадачу с номером версии."""
@@ -665,22 +688,7 @@ def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
         log.info("[DRY-RUN] Отчёт: %s", path)
         return "dry-run", None
 
-    queue = (issue.get("queue") or {}).get("key") or ctx.acfg.queue
-    parent_summary = truncate(issue.get("summary", ""), 90, "")
-    # номер версии = (число уже существующих ИИ-подзадач этого воркфлоу) + 1. Best-effort: поиск
-    # Трекера eventually-consistent, может занизить — тогда номер повторится (косметика, не коллизия).
-    version = ctx.tracker.count_ai_subtasks(key, ctx.acfg.component_name, wf.subtask.summary_prefix) + 1
-    vsuffix = f" (v{version})" if version > 1 else ""
-    subtask_key = ctx.tracker.create_subtask(
-        queue=queue,
-        parent=key,
-        summary=f"{wf.subtask.summary_prefix}{key}: {parent_summary}{vsuffix}",
-        description=markdown,
-        issue_type=wf.subtask.type,
-        component_id=ctx.component_id,
-        # unique по run_id -> каждый разбор = отдельная подзадача (переразбор не теряется из-за 409).
-        unique=f"{wf.subtask.unique_prefix}-{key}-{ctx.journal.run_id}",
-    )
+    subtask_key = _create_ai_subtask(ctx, workflow, issue, markdown)
     add = [wf.done_tag, wf.complexity_tags.simple if result.complexity == "simple"
            else wf.complexity_tags.complex]
     remove: list[str] = []
@@ -751,6 +759,8 @@ def determine_target_systems(ctx: RunContext, issue: dict) -> list[str]:
     try:
         resp = ctx.analyst.chat([Msg.system(system_detect_prompt(systems)), Msg.user("\n".join(user))])
         ctx.add_usage("analyst", resp.usage)
+    except RateLimitExhausted:
+        raise  # 429 — не выдаём за «систему не определить»; честно зафиксируется выше
     except Exception as e:  # noqa: BLE001
         log.warning("  %s: минизапуск определения системы не удался (%s) — система не определена", key, e)
         return []
@@ -993,6 +1003,45 @@ def _defer_task(ctx: RunContext, issue: dict, workflow: str, reason: str) -> dic
             "mode": "live" if ctx.live else "dry-run"}
 
 
+def _rate_limited_markdown(ctx: RunContext, workflow: str, issue: dict, exc: Exception) -> str:
+    """Тело подзадачи, ЧЕСТНО фиксирующее, что разбор не выполнен из-за лимитов API (429)."""
+    dtag = ctx.acfg.bugs.deferred_tag if workflow == "bugs" else ""
+    retry = (f"Задача помечена тегом «{dtag}» и будет автоматически переразобрана при сбросе "
+             "суточных лимитов. " if dtag else "")
+    return (
+        "> ⚠️ Автоматический предварительный ИИ-анализ.\n>\n"
+        "> **Разбор НЕ ВЫПОЛНЕН — превышены лимиты API (HTTP 429).**\n\n"
+        "## Статус\n\n"
+        f"Не удалось получить ответ модели-аналитика: лимиты API (429) не сняты после "
+        f"{Provider.RATE_LIMIT_RETRIES} попыток с паузой {Provider.RATE_LIMIT_SLEEP_S} с между ними. "
+        "Предварительный разбор для этой задачи **не проведён** — содержательных выводов нет.\n\n"
+        f"Техническая деталь: {exc}\n\n"
+        "## Что делать\n\n"
+        f"{retry}Либо запустите разбор повторно вручную позже, когда лимиты провайдера восстановятся "
+        "(снимите тег готовности, если он стоит).\n"
+    )
+
+
+def _record_rate_limited(ctx: RunContext, workflow: str, issue: dict, exc: Exception) -> dict:
+    """429 не снят после ретраев -> честная подзадача «разбор не выполнен». bugs: помечаем
+    deferred_tag (демон переразберёт при сбросе суток — без спама в каждый тик)."""
+    key = issue["key"]
+    markdown = _rate_limited_markdown(ctx, workflow, issue, exc)
+    if not ctx.live:
+        path = ctx.journal.dry_run_report(key, markdown)
+        log.warning("[DRY-RUN] %s: лимиты API (429) — отчёт-заглушка: %s", key, path)
+        return {"issue": key, "action": "rate-limited"}
+    subtask = _create_ai_subtask(ctx, workflow, issue, markdown)
+    dtag = ctx.acfg.bugs.deferred_tag if workflow == "bugs" else ""
+    if dtag:
+        try:
+            ctx.tracker.update_tags(key, add=[dtag])
+        except Exception as e:  # noqa: BLE001
+            log.warning("  %s: не удалось пометить отложенной после 429 (%s)", key, e)
+    log.warning("  %s -> rate-limited, подзадача %s (429)", key, subtask)
+    return {"issue": key, "action": "rate-limited", "subtask": subtask}
+
+
 def _zero_usage() -> dict:
     return {"analyst": {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tool_tokens": 0, "calls": 0},
             "vision": {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tool_tokens": 0, "calls": 0}}
@@ -1040,6 +1089,9 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
             fctx.current_work.start(issue["key"], workflow)
         try:
             r = process_issue(fctx, issue, workflow, idx=idx, total=total, force=force)
+        except RateLimitExhausted as e:
+            log.warning("%s: разбор прерван лимитами API (429) — фиксирую в подзадаче", issue.get("key"))
+            r = _record_rate_limited(fctx, workflow, issue, e)
         except Exception as e:  # noqa: BLE001
             log.exception("Ошибка обработки %s", issue.get("key"))
             r = {"issue": issue.get("key"), "action": "error", "error": f"{type(e).__name__}: {e}"}
@@ -1059,8 +1111,9 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
     def _record(issue: dict, r: dict) -> None:
         """Учёт результата в ГЛАВНОМ потоке: траты/счётчики (потому без локов), журнал, лог, брейкер."""
         akey = (issue.get("_trigger_author") or ("",))[0]
-        # счётчик автора резервируется при сабмите; skip-гейт разбором не был -> возвращаем резерв
-        if g and akey and str(r.get("action") or "").startswith("skipped"):
+        # счётчик автора резервируется при сабмите; разбором НЕ был (skip-гейт или 429) -> возврат резерва
+        act = str(r.get("action") or "")
+        if g and akey and (act.startswith("skipped") or act == "rate-limited"):
             g.counts.add(g.today, akey, -1)
         if g and r.get("action") in ("created", "dry-run", "error"):
             c, ccy = r.get("cost"), r.get("currency")

@@ -111,8 +111,8 @@ class OpenAICompatProvider(Provider):
 
     # ---------- вызов ----------
 
-    def chat(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
-             tool_choice: str | None = None) -> LLMResponse:
+    def _chat_once(self, messages: list[Msg], tools: list[ToolSpec] | None = None,
+                   tool_choice: str | None = None) -> LLMResponse:
         kwargs: dict = {
             "model": self._wire_model,
             "messages": self._to_openai_messages(messages),
