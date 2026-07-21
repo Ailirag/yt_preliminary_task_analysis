@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -18,6 +19,13 @@ from .config import OnecCfg
 from .llm.base import ToolSpec, truncate
 
 log = logging.getLogger("analyzer.onec")
+
+
+def _passthrough_env(environ: dict) -> dict:
+    """Переменные, которые НУЖНО пробросить в подпроцесс onec-lite поверх безопасного набора
+    MCP-SDK (get_default_environment() вырезает всё лишнее). Без ONEC_LITE_STATE мульти-воркспейс
+    onec-lite не видит ни одной рабочей копии («не сконфигурирован»). TZ — чтобы время совпадало."""
+    return {k: v for k, v in environ.items() if k.startswith("ONEC_LITE") or k == "TZ"}
 
 
 class OnecMCP:
@@ -40,7 +48,10 @@ class OnecMCP:
 
         self._loop = asyncio.get_running_loop()
         self._shutdown = asyncio.Event()
-        env = {**get_default_environment(), **self.cfg.env}
+        # ВАЖНО: get_default_environment() (MCP SDK) отдаёт лишь минимальный безопасный набор и
+        # вырезает наши ONEC_LITE_* (в т.ч. ONEC_LITE_STATE) — из-за чего мульти-воркспейс onec-lite
+        # стартовал без единой рабочей копии. Пробрасываем их явно; cfg.env перекрывает при необходимости.
+        env = {**get_default_environment(), **_passthrough_env(os.environ), **self.cfg.env}
         params = StdioServerParameters(
             command=self.cfg.command,
             args=self.cfg.resolved_args(self.project_root),

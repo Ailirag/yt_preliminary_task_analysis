@@ -161,3 +161,15 @@ def test_write_state_file_v2_schema(tmp_path):
     assert data["active"] == "ut"
     assert data["workspaces"]["ut"]["repo"] == "https://x/ut.git"
     assert data["workspaces"]["ut"]["update_on_start"] == "off"
+
+
+def test_onec_passthrough_env_keeps_onec_and_tz_only():
+    """ONEC_LITE_* и TZ пробрасываются в подпроцесс onec-lite (get_default_environment их вырезает),
+    а секреты/PATH — нет (их даёт безопасный набор MCP-SDK)."""
+    from analyzer.onec import _passthrough_env
+    out = _passthrough_env({
+        "ONEC_LITE_STATE": "/data/onec-lite/config.json", "ONEC_LITE_WORKSPACE": "ut",
+        "TZ": "Europe/Moscow", "YATRACKER_TOKEN_GT": "secret", "PATH": "/bin", "HOME": "/home/app",
+    })
+    assert out == {"ONEC_LITE_STATE": "/data/onec-lite/config.json",
+                   "ONEC_LITE_WORKSPACE": "ut", "TZ": "Europe/Moscow"}
