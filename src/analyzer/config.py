@@ -130,6 +130,7 @@ class WatchCfg(BaseModel):
     profile: str = ""                                      # профиль providers.yaml (пусто = default_profile); CLI --profile важнее
     daily_budget: float | None = None                      # ОБЩИЙ потолок трат за сутки в валюте аналитика; None = без лимита
     per_author_daily_limit: int = 0                        # макс. разборов на автора тега за сутки; 0 = без лимита
+    per_author_limit_overrides: dict[str, int] = {}        # индивидуальные лимиты: email (предпочт.)/uid -> лимит; перекрывает общий
     concurrency: int = 3                                   # сколько задач разбирать параллельно (зажим 1..5; 1 = последовательно)
     status_port: int = 8020                                # порт read-only веб-страницы статуса (0 = выключить)
     status_host: str = "0.0.0.0"                           # хост привязки (в контейнере 0.0.0.0; наружу порт публикует compose на 127.0.0.1)

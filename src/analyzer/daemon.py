@@ -21,6 +21,7 @@ from .pipeline import (LimitGate, RunContext, analyst_currency, build_query, cou
                        dump_revision, run_workflow)
 from .progress import CurrentWork
 from .status import in_progress, read_issue_rows, todays_rows
+from .users import UserMap
 from .webstatus import DaemonStats, StatusServer
 
 log = logging.getLogger("analyzer.daemon")
@@ -81,6 +82,38 @@ def _undefer_all(ctx: RunContext) -> None:
         log.info("watch: смена суток — снял тег «%s» с %d отложенных задач (лимиты сброшены)", dtag, n)
 
 
+def _resolve_author_maps(ctx: RunContext) -> tuple[dict[str, str], dict[str, int]]:
+    """По trigger_authors + per_author_limit_overrides строит (uid->email, uid->индивид.лимит).
+    email резолвится через UserMap (кеш work/user_map.json); ключи-оверрайды без '@' считаются
+    уже uid. Вызывается один раз на старте демона (справочник кешируется)."""
+    w = ctx.acfg.watch
+    overrides = dict(w.per_author_limit_overrides or {})
+    uid_to_email: dict[str, str] = {}
+    overrides_by_uid: dict[str, int] = {}
+    for k, v in overrides.items():                     # оверрайды, заданные напрямую uid (без '@')
+        if "@" not in str(k):
+            overrides_by_uid[str(k).strip()] = int(v)
+    ov_by_email = {str(k).strip().lower(): int(v) for k, v in overrides.items() if "@" in str(k)}
+    trigger = [a for a in (ctx.acfg.bugs.trigger_authors or []) if isinstance(a, str) and "@" in a]
+    emails = sorted({a.strip().lower() for a in trigger} | set(ov_by_email))
+    if emails:
+        cache = ctx.project_root / ctx.acfg.paths.work_dir / "user_map.json"
+        try:
+            resolved = UserMap(cache).resolve(emails, ctx.tracker.get_users)
+        except Exception as e:  # noqa: BLE001
+            log.warning("лимиты/дашборд: резолв email авторов не удался (%s)", e)
+            resolved = {}
+        for email, uids in resolved.items():
+            for uid in uids:
+                uid_to_email[uid] = email
+                if email in ov_by_email:
+                    overrides_by_uid[uid] = ov_by_email[email]
+    if overrides_by_uid:
+        log.info("watch: индивидуальные лимиты для %d автор(ов): %s", len(overrides_by_uid),
+                 ", ".join(f"{uid_to_email.get(u, u)}={lim}" for u, lim in overrides_by_uid.items()))
+    return uid_to_email, overrides_by_uid
+
+
 def _epoch(ts: str) -> float | None:
     try:
         return datetime.fromisoformat(ts).timestamp()
@@ -120,9 +153,11 @@ def _safe_revisions(ctx: RunContext) -> list[dict]:
 
 
 def _status_snapshot(ctx: RunContext, spend: DailySpend, counts: DailyCounts,
-                     stats: DaemonStats, cache: dict, now: float, ccy: str) -> dict:
+                     stats: DaemonStats, cache: dict, now: float, ccy: str,
+                     uid_to_email: dict[str, str], overrides_by_uid: dict[str, int]) -> dict:
     """Полное состояние анализатора для веб-страницы/JSON. Дорогие запросы (трекер, git-ревизии)
-    кэшируются на TTL, чтобы автообновление страницы не било по сети/диску каждую секунду."""
+    кэшируются на TTL, чтобы автообновление страницы не било по сети/диску каждую секунду.
+    Авторы показываются по e-mail (uid->email); лимит на автора — индивидуальный или общий."""
     w = ctx.acfg.watch
     today = _local_date(now)
     work_dir = ctx.project_root / ctx.acfg.paths.work_dir
@@ -187,8 +222,9 @@ def _status_snapshot(ctx: RunContext, spend: DailySpend, counts: DailyCounts,
         "budget": {"currency": ccy, "spent": spend.spent(today, ccy), "budget": w.daily_budget,
                    "remaining": round(w.daily_budget - spend.spent(today, ccy), 2) if w.daily_budget else None},
         "limits": {"per_author_limit": w.per_author_daily_limit,
-                   "authors": [{"uid": k, "count": v} for k, v in
-                               sorted(counts.all(today).items(), key=lambda kv: -kv[1])],
+                   "authors": [{"uid": k, "email": uid_to_email.get(k, k), "count": v,
+                                "limit": overrides_by_uid.get(k, w.per_author_daily_limit)}
+                               for k, v in sorted(counts.all(today).items(), key=lambda kv: -kv[1])],
                    "deferred_count": cache.get("deferred"),
                    "rate_limited_today": actions.get("rate-limited", 0)},
         "in_progress": in_progress(work_dir / "current.json", now),
@@ -222,12 +258,14 @@ def run_watch(ctx: RunContext, *, stop: threading.Event, now_fn=time.time) -> No
     tick = 0
     last_day = _local_date(now_fn())      # без снятия defer на старте — только при реальной смене суток
     stats = DaemonStats(start_ts=now_fn())
+    uid_to_email, overrides_by_uid = _resolve_author_maps(ctx)   # email авторов + индивид. лимиты
     snap_cache: dict = {}
     server = None
     if w.status_port:
         server = StatusServer(
             w.status_host, w.status_port,
-            lambda: _status_snapshot(ctx, spend, counts, stats, snap_cache, time.time(), ccy),
+            lambda: _status_snapshot(ctx, spend, counts, stats, snap_cache, time.time(), ccy,
+                                     uid_to_email, overrides_by_uid),
             w.status_refresh_s)
         server.start()
     log.info("watch: старт | workflow=%s selection=%s interval=%ss параллельно=%s бюджет=%s%s лимит/автор=%s окно=%s",
@@ -255,7 +293,8 @@ def run_watch(ctx: RunContext, *, stop: threading.Event, now_fn=time.time) -> No
                     ctx.limit_gate = LimitGate(
                         spend=spend, counts=counts, today=today, ccy=ccy,
                         daily_budget=w.daily_budget, per_author_limit=w.per_author_daily_limit,
-                        deferred_tag=ctx.acfg.bugs.deferred_tag)
+                        deferred_tag=ctx.acfg.bugs.deferred_tag,
+                        per_author_overrides=overrides_by_uid)
                     results = run_workflow(ctx, w.workflow, w.selection,
                                            ctx.acfg.limits.max_issues_per_run,
                                            should_stop=stop.is_set, concurrency=w.concurrency)

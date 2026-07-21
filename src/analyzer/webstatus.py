@@ -104,11 +104,10 @@ def render_html(snap: dict, refresh_s: int = 10) -> bytes:
     # лимиты: авторы
     authors = lim.get("authors") or []
     if authors:
-        pa = lim.get("per_author_limit") or 0
         arows = "".join(
-            f'<tr><td>{_esc(a.get("uid"))}</td><td>{_num(a.get("count"))}'
-            + (f" / {pa}" if pa else "") + "</td></tr>" for a in authors)
-        authors_tbl = f'<table class="grid"><tr><th>Автор (uid)</th><th>Разборов сегодня</th></tr>{arows}</table>'
+            f'<tr><td>{_esc(a.get("email") or a.get("uid"))}</td><td>{_num(a.get("count"))}'
+            + (f' / {a.get("limit")}' if a.get("limit") else "") + "</td></tr>" for a in authors)
+        authors_tbl = f'<table class="grid"><tr><th>Автор</th><th>Разборов сегодня</th></tr>{arows}</table>'
     else:
         authors_tbl = '<div class="muted">сегодня разборов по авторам ещё нет</div>'
     rl = lim.get("rate_limited_today") or 0

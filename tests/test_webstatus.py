@@ -16,7 +16,9 @@ def _snap():
         "watch": {"workflow": "bugs", "selection": "trigger-tag", "interval_s": 30,
                   "concurrency": 3, "work_hours": ""},
         "budget": {"currency": "₽", "spent": 291.8, "budget": 8000.0, "remaining": 7708.2},
-        "limits": {"per_author_limit": 5, "authors": [{"uid": "uA", "count": 2}],
+        "limits": {"per_author_limit": 5,
+                   "authors": [{"uid": "uA", "email": "garipov_ir@grandtrade.world", "count": 2, "limit": 15},
+                               {"uid": "uB", "email": "petrov@grandtrade.world", "count": 1, "limit": 5}],
                    "deferred_count": 1, "rate_limited_today": 2},
         "in_progress": [{"key": "ONE-1", "workflow": "bugs", "age_s": 130}],
         "queue_pending": 4,
@@ -38,7 +40,8 @@ def test_render_json_roundtrips():
 def test_render_html_contains_key_facts():
     html = render_html(_snap()).decode("utf-8")
     assert html.startswith("<!doctype html>")
-    for needle in ("ONE-1", "Параллельно", "8000", "429", "ONE-4771", "ut", "Отложено по лимиту"):
+    for needle in ("ONE-1", "Параллельно", "8000", "429", "ONE-4771", "ut", "Отложено по лимиту",
+                   "garipov_ir@grandtrade.world", "2 / 15"):   # автор по e-mail + индивид. лимит
         assert needle in html, needle
 
 

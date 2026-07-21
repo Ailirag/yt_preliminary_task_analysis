@@ -40,8 +40,13 @@ class LimitGate:
     today: str                       # текущая дата (локальная TZ демона)
     ccy: str                         # валюта аналитика для сверки бюджета
     daily_budget: float | None       # общий дневной потолок трат (None = без лимита)
-    per_author_limit: int            # макс. разборов на автора за сутки (0 = без лимита)
+    per_author_limit: int            # макс. разборов на автора за сутки по умолчанию (0 = без лимита)
     deferred_tag: str                # тег для отложенных по лимиту задач
+    per_author_overrides: dict = field(default_factory=dict)  # uid -> индивидуальный лимит (перекрывает per_author_limit)
+
+    def limit_for(self, uid: str) -> int:
+        """Суточный лимит разборов для автора: индивидуальный (если задан) иначе общий."""
+        return self.per_author_overrides.get(uid, self.per_author_limit)
 
 
 @dataclass
@@ -1148,7 +1153,7 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
                         break
                     if g:
                         akey = (issue.get("_trigger_author") or ("",))[0]
-                        if akey and g.counts.exceeded(g.today, akey, g.per_author_limit):
+                        if akey and g.counts.exceeded(g.today, akey, g.limit_for(akey)):
                             _defer(issue, "author")
                             pos += 1
                             continue

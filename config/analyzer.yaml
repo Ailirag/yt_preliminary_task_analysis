@@ -73,6 +73,8 @@ watch:
   profile: ""                    # профиль providers.yaml для демона (пусто = default_profile). Прод на Yandex: "yandex"
   daily_budget: null             # ОБЩИЙ потолок трат за сутки в валюте аналитика ($/₽); null = без лимита. Пример: 5.0
   per_author_daily_limit: 0      # макс. разборов на автора тега за сутки; 0 = без лимита. Пример: 5
+  per_author_limit_overrides: {} # индивидуальные лимиты (перекрывают общий): e-mail (предпочт.) или uid -> число.
+                                 # Пример: {"garipov_ir@grandtrade.world": 15, "abakarov_ni@grandtrade.world": 15}
   concurrency: 3                 # сколько задач разбирать ОДНОВРЕМЕННО (1..5; 1 = последовательно). Старт с 3, при упоре в лимиты API снизить
   status_port: 8020              # read-only веб-страница статуса демона (0 = выключить); порт публикует compose на 127.0.0.1
   status_host: "0.0.0.0"         # хост привязки внутри контейнера (наружу ограничивает compose: 127.0.0.1:8020)

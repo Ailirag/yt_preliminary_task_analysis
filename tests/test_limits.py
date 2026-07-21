@@ -96,6 +96,23 @@ def test_per_author_gate_defers_excess_others_proceed(tmp_path, monkeypatch):
     assert gate.counts.count("2026-07-21", "B") == 1
 
 
+def test_per_author_override_raises_limit_for_one_user(tmp_path, monkeypatch):
+    """Индивидуальный лимит: у автора с оверрайдом порог выше общего (VIP=2 против общего 1)."""
+    tagged, proc = [], []
+    issues = [_issue("ONE-1", "VIP"), _issue("ONE-2", "VIP"), _issue("ONE-3", "VIP"),
+              _issue("ONE-4", "REG"), _issue("ONE-5", "REG")]
+    _patch(monkeypatch, issues, proc)
+    gate = LimitGate(spend=DailySpend(tmp_path / "s.json"), counts=DailyCounts(tmp_path / "c.json"),
+                     today="2026-07-21", ccy="$", daily_budget=None, per_author_limit=1,
+                     deferred_tag="ИИ_отложено_лимит", per_author_overrides={"VIP": 2})
+    ctx = _wf_ctx(gate, tagged)
+    results = pipeline.run_workflow(ctx, "bugs", "trigger-tag", 10)
+    assert proc == ["ONE-1", "ONE-2", "ONE-4"]              # VIP: 2 разбора; REG: 1
+    acts = {r["issue"]: r["action"] for r in results}
+    assert acts["ONE-3"] == "deferred-author" and acts["ONE-5"] == "deferred-author"
+    assert gate.limit_for("VIP") == 2 and gate.limit_for("REG") == 1
+
+
 def test_no_gate_means_no_limits(tmp_path, monkeypatch):
     """Ручной прогон (limit_gate=None) — лимиты не применяются."""
     tagged, proc = [], []

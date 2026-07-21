@@ -43,7 +43,7 @@ def _fake_ctx(tmp_path):
             watch=WatchCfg(interval_s=1, status_port=0),   # без веб-сервера в юнит-тестах
             paths=PathsCfg(work_dir="work"),
             limits=SimpleNamespace(max_issues_per_run=5),
-            bugs=SimpleNamespace(deferred_tag="ИИ_отложено_лимит"),
+            bugs=SimpleNamespace(deferred_tag="ИИ_отложено_лимит", trigger_authors=[]),
         ),
         project_root=tmp_path,
         tracker=SimpleNamespace(finish_iteration=lambda: None),
@@ -70,6 +70,25 @@ def test_tick_processes_when_candidates(tmp_path, monkeypatch):
     # учёт трат теперь per-issue внутри run_workflow; демон лишь собирает gate и передаёт его
     g = calls["gate"]
     assert g is not None and g.ccy == "$" and g.deferred_tag == "ИИ_отложено_лимит"
+
+
+def test_resolve_author_maps_email_and_overrides(tmp_path):
+    """uid->email (для дашборда) + uid->индивид.лимит из per_author_limit_overrides.
+    Учитывает несколько активных uid на один email."""
+    users = [{"email": "garipov_ir@grandtrade.world", "uid": "842", "dismissed": False},
+             {"email": "garipov_ir@grandtrade.world", "uid": "2727", "dismissed": False},
+             {"email": "petrov@grandtrade.world", "uid": "500", "dismissed": False}]
+    ctx = SimpleNamespace(
+        acfg=SimpleNamespace(
+            watch=WatchCfg(per_author_limit_overrides={"garipov_ir@grandtrade.world": 15}),
+            bugs=SimpleNamespace(trigger_authors=["garipov_ir@grandtrade.world", "petrov@grandtrade.world"]),
+            paths=PathsCfg(work_dir="work")),
+        project_root=tmp_path,
+        tracker=SimpleNamespace(get_users=lambda: users))
+    u2e, ov = daemon._resolve_author_maps(ctx)
+    assert u2e == {"842": "garipov_ir@grandtrade.world", "2727": "garipov_ir@grandtrade.world",
+                   "500": "petrov@grandtrade.world"}
+    assert ov == {"842": 15, "2727": 15}                    # оба uid Гарипова -> 15; Петров без оверрайда
 
 
 def test_tick_skips_when_no_candidates(tmp_path, monkeypatch):
