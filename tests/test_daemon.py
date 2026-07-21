@@ -39,33 +39,37 @@ def test_window_bad_format_defaults_true():
 def _fake_ctx(tmp_path):
     return SimpleNamespace(
         acfg=SimpleNamespace(
+            queue="ONE",
             watch=WatchCfg(interval_s=1),
             paths=PathsCfg(work_dir="work"),
             limits=SimpleNamespace(max_issues_per_run=5),
+            bugs=SimpleNamespace(deferred_tag="ИИ_отложено_лимит"),
         ),
         project_root=tmp_path,
         tracker=SimpleNamespace(finish_iteration=lambda: None),
         reset_for_run=lambda run_id: None,
+        limit_gate=None,
     )
 
 
 def test_tick_processes_when_candidates(tmp_path, monkeypatch):
     stop = threading.Event()
-    calls = {"run": 0}
+    calls = {"run": 0, "gate": None}
     monkeypatch.setattr(daemon, "analyst_currency", lambda ctx: "$")
     monkeypatch.setattr(daemon, "count_candidates", lambda ctx, wf, sel: 1)
-    monkeypatch.setattr(daemon, "summarize_run", lambda results: {"cost_by_currency": {"$": 0.4}})
 
     def fake_run_workflow(ctx, wf, sel, limit, should_stop=None):
         calls["run"] += 1
+        calls["gate"] = ctx.limit_gate              # демон должен собрать и передать gate лимитов
         stop.set()                                  # остановиться после первого тика
         return [{"action": "created", "cost": 0.4, "currency": "$"}]
 
     monkeypatch.setattr(daemon, "run_workflow", fake_run_workflow)
     run_watch(_fake_ctx(tmp_path), stop=stop)
     assert calls["run"] == 1
-    # расход записан на диск
-    assert (tmp_path / "work" / "daily_spend.json").exists()
+    # учёт трат теперь per-issue внутри run_workflow; демон лишь собирает gate и передаёт его
+    g = calls["gate"]
+    assert g is not None and g.ccy == "$" and g.deferred_tag == "ИИ_отложено_лимит"
 
 
 def test_tick_skips_when_no_candidates(tmp_path, monkeypatch):

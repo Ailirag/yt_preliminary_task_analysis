@@ -14,10 +14,10 @@ import logging
 import threading
 import time
 
-from .budget import DailySpend
+from .budget import DailyCounts, DailySpend
 from .lock import LockHeld, SingleInstanceLock
-from .pipeline import (RunContext, analyst_currency, count_candidates,
-                       run_workflow, summarize_run)
+from .pipeline import (LimitGate, RunContext, analyst_currency, count_candidates,
+                       run_workflow)
 
 log = logging.getLogger("analyzer.daemon")
 
@@ -55,6 +55,28 @@ def _fmt_spend(spend: DailySpend, today: str) -> str:
     return "; ".join(parts) or "0"
 
 
+def _undefer_all(ctx: RunContext) -> None:
+    """Смена суток: снять тег «отложено по лимиту» со всех задач — лимиты сброшены, пусть
+    возвращаются в выборку. В dry-run снятие лишь журналируется (реальных тегов там и не было)."""
+    dtag = ctx.acfg.bugs.deferred_tag
+    if not dtag:
+        return
+    try:
+        issues = ctx.tracker.search(f'Queue: {ctx.acfg.queue} Tags: "{dtag}"', per_page=50, max_pages=10)
+    except Exception as e:  # noqa: BLE001
+        log.warning("watch: не удалось найти отложенные задачи для снятия тега (%s)", e)
+        return
+    n = 0
+    for it in issues:
+        try:
+            ctx.tracker.update_tags(it["key"], remove=[dtag])
+            n += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("watch: не снял тег %s с %s (%s)", dtag, it.get("key"), e)
+    if n:
+        log.info("watch: смена суток — снял тег «%s» с %d отложенных задач (лимиты сброшены)", dtag, n)
+
+
 def run_watch(ctx: RunContext, *, stop: threading.Event, now_fn=time.time) -> None:
     """Главный цикл демона. Завершается по установке `stop` (сигнал SIGTERM/SIGINT)."""
     w = ctx.acfg.watch
@@ -64,13 +86,15 @@ def run_watch(ctx: RunContext, *, stop: threading.Event, now_fn=time.time) -> No
         raise LockHeld(f"Демон уже запущен (лок {lock.path}) — второй экземпляр не стартует")
 
     spend = DailySpend(work_dir / "daily_spend.json")
+    counts = DailyCounts(work_dir / "daily_counts.json")
     ccy = analyst_currency(ctx)
     backoff = 0
     tick = 0
-    log.info("watch: старт | workflow=%s selection=%s interval=%ss бюджет=%s%s окно=%s",
+    last_day = _local_date(now_fn())      # без снятия defer на старте — только при реальной смене суток
+    log.info("watch: старт | workflow=%s selection=%s interval=%ss бюджет=%s%s лимит/автор=%s окно=%s",
              w.workflow, w.selection, w.interval_s,
              w.daily_budget if w.daily_budget else "—", f" {ccy}" if w.daily_budget else "",
-             w.work_hours or "24/7")
+             w.per_author_daily_limit or "—", w.work_hours or "24/7")
     try:
         while not stop.is_set():
             lock.heartbeat()
@@ -78,19 +102,24 @@ def run_watch(ctx: RunContext, *, stop: threading.Event, now_fn=time.time) -> No
             try:
                 now = now_fn()
                 today = _local_date(now)
+                if today != last_day:               # смена суток -> лимиты обнулились, снять отложенные
+                    _undefer_all(ctx)
+                    last_day = today
                 if not _in_work_hours(now, w.work_hours):
                     pass  # вне окна работы — просто ждём
-                elif spend.exceeded(today, w.daily_budget, ccy):
-                    log.info("watch: дневной бюджет %s %s исчерпан (потрачено %s) — пауза до след. суток",
-                             w.daily_budget, ccy, _fmt_spend(spend, today))
                 elif count_candidates(ctx, w.workflow, w.selection) > 0:
                     tick += 1
                     run_id = time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + f"-{tick}"
                     ctx.reset_for_run(run_id)
+                    # лимиты тика: общий дневной бюджет + разборов на автора. Учёт трат и счётчиков
+                    # ведётся per-issue ВНУТРИ run_workflow (через этот gate), поэтому здесь spend не копим.
+                    ctx.limit_gate = LimitGate(
+                        spend=spend, counts=counts, today=today, ccy=ccy,
+                        daily_budget=w.daily_budget, per_author_limit=w.per_author_daily_limit,
+                        deferred_tag=ctx.acfg.bugs.deferred_tag)
                     results = run_workflow(ctx, w.workflow, w.selection,
                                            ctx.acfg.limits.max_issues_per_run,
                                            should_stop=stop.is_set)
-                    spend.add(today, summarize_run(results).get("cost_by_currency") or {})
                     if results:
                         log.info("watch: тик #%d — задач %d, потрачено сегодня %s",
                                  tick, len(results), _fmt_spend(spend, today))

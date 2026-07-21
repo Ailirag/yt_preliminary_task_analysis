@@ -35,6 +35,9 @@ class BugsCfg(BaseModel):
     trigger_authors: list[str] = Field(default_factory=list)
     complexity_tags: ComplexityTags
     subtask: SubtaskCfg
+    # Тег для задач, отложенных из-за лимита (личного или дневного бюджета). Демон помечает им
+    # задачу вместо разбора и исключает её из выборки; при смене суток тег снимается автоматически.
+    deferred_tag: str = "ИИ_отложено_лимит"
 
 
 class FtCfg(BaseModel):
@@ -125,7 +128,8 @@ class WatchCfg(BaseModel):
     workflow: Literal["bugs", "ft"] = "bugs"
     selection: Literal["no-done-tag", "trigger-tag"] = "trigger-tag"  # для демона безопаснее по тегу
     profile: str = ""                                      # профиль providers.yaml (пусто = default_profile); CLI --profile важнее
-    daily_budget: float | None = None                      # потолок стоимости за сутки в валюте аналитика; None = без лимита
+    daily_budget: float | None = None                      # ОБЩИЙ потолок трат за сутки в валюте аналитика; None = без лимита
+    per_author_daily_limit: int = 0                        # макс. разборов на автора тега за сутки; 0 = без лимита
     work_hours: str = ""                                   # окно работы "HH:MM-HH:MM" (локальное); пусто = круглосуточно
     lock_file: str = "analyzer.lock"                       # относительно paths.work_dir
     error_backoff_s: int = 60                              # пауза после ошибки тика (растёт до max_backoff_s)

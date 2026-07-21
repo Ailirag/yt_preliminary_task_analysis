@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .budget import DailyCounts, DailySpend
 from .config import AnalyzerCfg, ProvidersCfg
 from .journal import Journal, now_iso
 from .llm import ImagePart, Msg, Provider, ToolSpec, extract_json
@@ -25,6 +26,19 @@ from .wiki import WikiClient, extract_wiki_urls
 log = logging.getLogger("analyzer.pipeline")
 
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"}
+
+
+@dataclass
+class LimitGate:
+    """Лимиты одного тика демона (у ручных прогонов None = без лимитов). Проверяется ПЕРЕД
+    началом каждой задачи, поэтому уже начатый разбор всегда доигрывается до конца."""
+    spend: DailySpend                # общий дневной расход (валюта аналитика)
+    counts: DailyCounts              # разборов на автора за сутки
+    today: str                       # текущая дата (локальная TZ демона)
+    ccy: str                         # валюта аналитика для сверки бюджета
+    daily_budget: float | None       # общий дневной потолок трат (None = без лимита)
+    per_author_limit: int            # макс. разборов на автора за сутки (0 = без лимита)
+    deferred_tag: str                # тег для отложенных по лимиту задач
 
 
 @dataclass
@@ -50,6 +64,7 @@ class RunContext:
     nav_log: list = field(default_factory=list)           # след навигации (для отчёта/журнала)
     related_cache: dict = field(default_factory=dict)     # ключ задачи -> готовый текст (кэш на прогон)
     onec_workspaces: list = field(default_factory=list)   # целевые воркспейсы текущей задачи (мульти-система)
+    limit_gate: "LimitGate | None" = None                 # лимиты тика демона (None у ручных прогонов)
 
     def add_usage(self, role: str, usage: dict) -> None:
         bucket = self.usage.setdefault(
@@ -84,11 +99,14 @@ def build_query(acfg: AnalyzerCfg, workflow: str, selection: str) -> str:
     skip = f' Tags: !"{acfg.skip_tag}"' if acfg.skip_tag else ""
     if workflow == "bugs":
         b = acfg.bugs
+        # отложенные по лимиту исключаем из выборки (тег снимет демон при смене суток) — иначе
+        # они заняли бы слоты тика (max_issues_per_run) и не дали бы дойти до свежих задач.
+        defer = f' Tags: !"{b.deferred_tag}"' if b.deferred_tag else ""
         if selection == "trigger-tag":
             return (f'Queue: {q} Type: Ошибка Resolution: empty() '
-                    f'Tags: "{b.trigger_tag}" Tags: !"{b.done_tag}"{skip} "Sort by": Updated ASC')
+                    f'Tags: "{b.trigger_tag}" Tags: !"{b.done_tag}"{skip}{defer} "Sort by": Updated ASC')
         return (f'Queue: {q} Type: Ошибка Resolution: empty() '
-                f'Tags: !"{b.done_tag}"{skip} "Sort by": Updated ASC')
+                f'Tags: !"{b.done_tag}"{skip}{defer} "Sort by": Updated ASC')
     f = acfg.ft
     return f'Queue: {q} Resolution: empty() Tags: "{f.trigger_tag}"{skip} "Sort by": Updated ASC'
 
@@ -118,41 +136,54 @@ def _allowed_tokens(ctx: "RunContext", allowed: list[str]) -> set[str]:
     return tokens
 
 
-def _trigger_set_by_allowed(ctx: RunContext, key: str, trigger_tag: str,
-                            allowed: list[str]) -> bool:
-    """True, если тег-триггер добавлен кем-то из allowed (сверка по id ИЛИ имени, без регистра).
-    Пустой allowed = разрешено всем. Тег без события добавления в истории (проставлен при
-    создании) → False: автора достоверно не определить, задачу пропускаем."""
-    if not allowed:
-        return True
-    norm = _allowed_tokens(ctx, allowed)
-    if not norm:
-        log.warning("  %s: белый список задан, но ни одна запись не разрешена в id — пропускаю", key)
-        return False
+def _trigger_author(ctx: RunContext, key: str, trigger_tag: str) -> tuple[str, str] | None:
+    """(uid, display) автора ПОСЛЕДНЕГО добавления тега-триггера в истории; None — если события
+    добавления нет (тег проставлен при создании) или история недоступна."""
     try:
         entries = ctx.tracker.get_changelog(key, field="tags")
     except Exception as e:  # noqa: BLE001
-        log.warning("  %s: не удалось получить историю тегов (%s) — пропускаю", key, e)
-        return False
-    # changelog в хронологическом порядке; берём АВТОРА ПОСЛЕДНЕГО добавления тега-триггера
+        log.warning("  %s: не удалось получить историю тегов (%s)", key, e)
+        return None
     adder: dict | None = None
-    for entry in entries:
+    for entry in entries:                       # changelog хронологичен -> последнее добавление побеждает
         for f in (entry.get("fields") or []):
             if ((f.get("field") or {}).get("id")) != "tags":
                 continue
             if trigger_tag in _tag_ids(f.get("to")) and trigger_tag not in _tag_ids(f.get("from")):
                 adder = entry.get("updatedBy") or {}
     if adder is None:
+        return None
+    return str(adder.get("id") or "").strip(), str(adder.get("display") or "").strip()
+
+
+def _author_allowed(ctx: RunContext, author: tuple[str, str] | None, allowed: list[str]) -> bool:
+    """Разрешён ли автор (uid, display) по белому списку (сверка по uid ИЛИ имени, без регистра).
+    Пустой allowed = разрешено всем."""
+    if not allowed:
+        return True
+    norm = _allowed_tokens(ctx, allowed)
+    if not norm or author is None:
+        return False
+    who_id, who_display = author
+    return who_id.strip().lower() in norm or who_display.strip().lower() in norm
+
+
+def _trigger_set_by_allowed(ctx: RunContext, key: str, trigger_tag: str,
+                            allowed: list[str]) -> bool:
+    """True, если тег-триггер добавлен кем-то из allowed. Пустой allowed = разрешено всем.
+    Тег без события добавления в истории (проставлен при создании) → False: автора не определить."""
+    if not allowed:
+        return True
+    author = _trigger_author(ctx, key, trigger_tag)
+    if author is None:
         log.info("  %s: тег %r без события добавления (проставлен при создании?) — пропускаю",
                  key, trigger_tag)
         return False
-    who_id = str(adder.get("id") or "").strip().lower()
-    who_display = str(adder.get("display") or "").strip().lower()
-    if who_id in norm or who_display in norm:
-        return True
-    log.info("  %s: тег %r поставил %r — не из белого списка, пропускаю",
-             key, trigger_tag, adder.get("display") or adder.get("id"))
-    return False
+    if not _author_allowed(ctx, author, allowed):
+        log.info("  %s: тег %r поставил %r — не из белого списка, пропускаю",
+                 key, trigger_tag, author[1] or author[0])
+        return False
+    return True
 
 
 def select_issues(ctx: RunContext, workflow: str, selection: str, limit: int,
@@ -174,11 +205,18 @@ def select_issues(ctx: RunContext, workflow: str, selection: str, limit: int,
                 continue
             if b.done_tag in tags:
                 continue
-            if selection == "trigger-tag" and b.trigger_tag not in tags:
-                continue
-            if selection == "trigger-tag" and not _trigger_set_by_allowed(
-                    ctx, issue["key"], b.trigger_tag, b.trigger_authors):
-                continue
+            if b.deferred_tag and b.deferred_tag in tags:
+                continue  # отложена по лимиту — ждёт снятия тега демоном (смена суток)
+            if selection == "trigger-tag":
+                if b.trigger_tag not in tags:
+                    continue
+                # автор тега-триггера: и для белого списка, и как ключ пер-авторского лимита
+                author = _trigger_author(ctx, issue["key"], b.trigger_tag)
+                if b.trigger_authors and not _author_allowed(ctx, author, b.trigger_authors):
+                    log.info("  %s: тег-триггер вне белого списка авторов (или без события добавления) — пропускаю",
+                             issue["key"])
+                    continue
+                issue["_trigger_author"] = author   # (uid, display) либо None
         else:
             if ctx.acfg.ft.trigger_tag not in tags:
                 continue
@@ -933,6 +971,23 @@ def summarize_run(results: list[dict]) -> dict:
     }
 
 
+def _defer_task(ctx: RunContext, issue: dict, workflow: str, reason: str) -> dict:
+    """Отложить задачу по лимиту: пометить тегом deferred_tag (bugs) и вернуть запись результата.
+    reason: 'budget' (общий дневной кап) | 'author' (лимит разборов на автора). Тег снимет демон
+    при смене суток → задача вернётся в выборку. Разбор НЕ запускается (гейт до его начала)."""
+    key = issue["key"]
+    action = "deferred-budget" if reason == "budget" else "deferred-author"
+    dtag = ctx.acfg.bugs.deferred_tag if workflow == "bugs" else ""
+    if dtag:
+        try:
+            ctx.tracker.update_tags(key, add=[dtag])
+        except Exception as e:  # noqa: BLE001
+            log.warning("  %s: не удалось пометить отложенной (%s)", key, e)
+    log.info("  %s -> %s (лимит)", key, action)
+    return {"issue": key, "action": action, "workflow": workflow,
+            "mode": "live" if ctx.live else "dry-run"}
+
+
 def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
                  issue_key: str | None = None, force: bool = False,
                  should_stop=None) -> list[dict]:
@@ -944,6 +999,25 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
         if should_stop is not None and should_stop():
             log.info("Остановка по сигналу — прерываю прогон (обработано %d/%d)", i, len(issues))
             break
+        # ЛИМИТЫ (только у демона; ручные прогоны limit_gate=None). Гейт ДО начала разбора —
+        # уже начатый разбор всегда доигрывается до конца.
+        g = ctx.limit_gate
+        if g:
+            if g.spend.exceeded(g.today, g.daily_budget, g.ccy):
+                log.info("Дневной бюджет %s %s исчерпан — откладываю остаток (%d задач)",
+                         g.daily_budget, g.ccy, len(issues) - i)
+                for it in issues[i:]:
+                    r = _defer_task(ctx, it, workflow, "budget")
+                    ctx.journal.run_event(**r)
+                    results.append(r)
+                break
+            author = issue.get("_trigger_author")
+            akey = author[0] if author else ""
+            if akey and g.counts.exceeded(g.today, akey, g.per_author_limit):
+                r = _defer_task(ctx, issue, workflow, "author")
+                ctx.journal.run_event(**r)
+                results.append(r)
+                continue
         before = ctx.usage_snapshot()
         try:
             r = process_issue(ctx, issue, workflow, idx=i + 1, total=len(issues), force=force)
@@ -955,6 +1029,14 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
         r["workflow"] = workflow
         r["mode"] = "live" if ctx.live else "dry-run"
         r["usage"] = _usage_delta(before, ctx.usage)  # пер-задачный расход по ролям
+        # учёт лимитов: считаем разбор, который РЕАЛЬНО шёл (created/dry-run/error), не skip-гейты.
+        if g and r.get("action") in ("created", "dry-run", "error"):
+            author = issue.get("_trigger_author")
+            if author and author[0]:
+                g.counts.add(g.today, author[0])
+            c, ccy = r.get("cost"), r.get("currency")
+            if isinstance(c, (int, float)) and ccy:
+                g.spend.add(g.today, {ccy: c})
         ctx.journal.run_event(**r)
         results.append(r)
         log.info("[%d/%d] %s -> %s%s (%.0fс)", i + 1, len(issues), r.get("issue"), r.get("action"),
