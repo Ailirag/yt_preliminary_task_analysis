@@ -202,7 +202,7 @@ table.grid td {{ padding:4px 10px 4px 0; border-bottom:1px solid #20242e; }}
 .fill {{ background:linear-gradient(90deg,#4a9,#5fd28a); height:100%; }}
 </style></head><body>
 <h1>ИИ-анализатор — статус</h1>
-<div class="top">{_esc(snap.get('now'))} · обновление каждые {refresh_s}с · <a href="/status.json" style="color:#6ac">/status.json</a></div>
+<div class="top">{_esc(snap.get('now'))} · обновление каждые {refresh_s}с · <a href="status.json" style="color:#6ac">status.json</a></div>
 <div class="grid-cols">
   <div class="card"><h2>Демон</h2><table class="kv">{daemon_rows}</table></div>
   <div class="card"><h2>Конфигурация</h2><table class="kv">{watch_rows}</table></div>
