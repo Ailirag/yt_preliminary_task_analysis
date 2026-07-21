@@ -26,21 +26,18 @@ services:
     #  HTTPS_PROXY: "http://proxy.local:3128"
     #  NO_PROXY: "localhost,127.0.0.1,github.com"
     volumes:
-      # git-выгрузка конфигурации УТ (host: git clone/pull, владелец — пользователь), только чтение.
-      # ВАЖНО: analyzer.yaml -> onec.dump_path ДОЛЖЕН быть ровно /data/dump (digest FTS зависит от строки пути).
-      - /mnt/storage/analyzer/dump:/data/dump:ro
-      # прод-конфиг: копия config/analyzer.yaml с dump_path: /data/dump, mode: live, блоком watch.
+      # прод-конфиг: копия config/analyzer.yaml (мульти-система: systems заполнен, onec.dump_path: "").
       - /home/adm_garipov_ir/analyzer/config/analyzer.yaml:/app/config/analyzer.yaml:ro
-      # providers.yaml (профили/модели/тарифы) — тоже внешним файлом, чтобы правки не требовали пересборки.
+      # providers.yaml (профили/модели/тарифы) — внешним файлом, чтобы правки не требовали пересборки.
       - /home/adm_garipov_ir/analyzer/config/providers.yaml:/app/config/providers.yaml:ro
-      # FTS-индекс (~1 ГБ) — переживает пересоздание контейнера (владелец 10001).
+      # FTS-индекс + зеркала систем (~ГБ) — переживают пересоздание контейнера (владелец 10001).
       - /mnt/storage/analyzer/onec-lite:/data/onec-lite
       # операционное состояние и данные компании (владелец 10001).
       - /mnt/storage/analyzer/work:/app/work
       - /mnt/storage/analyzer/journal:/app/journal
-    # МУЛЬТИ-СИСТЕМА: при заполненном config.systems (+ onec.dump_path: "") entrypoint сам сгенерирует
-    # state-файл, склонирует зеркала в /data/onec-lite/mirrors и построит FTS по каждому воркспейсу;
-    # том /data/dump тогда не используется (можно оставить смонтированным — безвредно).
+    # МУЛЬТИ-СИСТЕМА: entrypoint генерирует state-файл из config.systems, клонирует зеркала в
+    # /data/onec-lite/mirrors и строит FTS по каждому воркспейсу. Одиночный дамп /data/dump НЕ монтируется.
+    # (Для одиночного режима — systems: [] + вернуть маунт /mnt/storage/analyzer/dump:/data/dump:ro.)
 
   # Плановое обновление зеркал 1С (только для мульти-системы): отдельный процесс onec-lite sync.
   # Держит рабочие копии свежими; FTS НЕ строит — обслуживающий onec-lite внутри analyzer сам
