@@ -195,7 +195,9 @@ def _status_snapshot(ctx: RunContext, spend: DailySpend, counts: DailyCounts,
         throughput = round(analyzed / max(0.05, (now - earliest) / 3600), 1)
     recent = [{"time": str(r.get("ts") or "")[11:16], "issue": r.get("issue"),
                "action": r.get("action"), "trust": r.get("trust"), "cost": r.get("cost"),
-               "currency": r.get("currency"), "subtask": r.get("subtask")} for r in rows[-8:][::-1]]
+               "currency": r.get("currency"), "subtask": r.get("subtask"),
+               "author": uid_to_email.get(r.get("author_uid") or "", "") or r.get("author") or ""}
+              for r in rows[-8:][::-1]]
 
     ttl = 60
     if now - cache.get("net_ts", 0) > ttl:

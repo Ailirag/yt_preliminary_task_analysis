@@ -163,10 +163,11 @@ def render_html(snap: dict, refresh_s: int = 10) -> bytes:
     if recent:
         rrows = "".join(
             f'<tr><td>{_esc(r.get("time"))}</td><td>{_esc(r.get("issue"))}</td>'
+            f'<td>{_esc(r.get("author") or "—")}</td>'
             f'<td>{_esc(r.get("action"))}</td><td>{_esc(r.get("trust") or "—")}</td>'
             f'<td>{_num(r.get("cost"))} {_esc(r.get("currency") or "")}</td>'
             f'<td>{_esc(r.get("subtask") or "—")}</td></tr>' for r in recent)
-        recent_tbl = (f'<table class="grid"><tr><th>Время</th><th>Задача</th><th>Действие</th>'
+        recent_tbl = (f'<table class="grid"><tr><th>Время</th><th>Задача</th><th>Автор</th><th>Действие</th>'
                       f'<th>Доверие</th><th>Стоимость</th><th>Подзадача</th></tr>{rrows}</table>')
     else:
         recent_tbl = '<div class="muted">сегодня прогонов ещё не было</div>'

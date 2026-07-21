@@ -113,6 +113,14 @@ def test_per_author_override_raises_limit_for_one_user(tmp_path, monkeypatch):
     assert gate.limit_for("VIP") == 2 and gate.limit_for("REG") == 1
 
 
+def test_result_carries_trigger_author(tmp_path, monkeypatch):
+    """Автор тега-триггера штампуется в запись результата (uid+display) — для дашборда/журнала."""
+    tagged, proc = [], []
+    _patch(monkeypatch, [_issue("ONE-1", "u7")], proc)
+    results = pipeline.run_workflow(_wf_ctx(None, tagged), "bugs", "trigger-tag", 5)
+    assert results[0]["author_uid"] == "u7" and results[0]["author"] == "User u7"
+
+
 def test_no_gate_means_no_limits(tmp_path, monkeypatch):
     """Ручной прогон (limit_gate=None) — лимиты не применяются."""
     tagged, proc = [], []

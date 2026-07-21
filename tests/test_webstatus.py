@@ -26,7 +26,8 @@ def _snap():
                   "avg_confidence": 92.0, "cost_by_ccy": {"₽": 443.5}, "avg_cost": 88.7,
                   "avg_duration_s": 720.0, "throughput_per_h": 1.5},
         "recent": [{"time": "16:32", "issue": "ONE-4768", "action": "created", "trust": "доверять",
-                    "cost": 107.57, "currency": "₽", "subtask": "ONE-4771"}],
+                    "cost": 107.57, "currency": "₽", "subtask": "ONE-4771",
+                    "author": "kirilkin_da@grandtrade.world"}],
         "onec": {"available": True, "tools": 30,
                  "workspaces": [{"name": "УТ", "workspace": "ut", "revision": "c8dca92867 2026-07-21"}]},
     }
@@ -41,7 +42,8 @@ def test_render_html_contains_key_facts():
     html = render_html(_snap()).decode("utf-8")
     assert html.startswith("<!doctype html>")
     for needle in ("ONE-1", "Параллельно", "8000", "429", "ONE-4771", "ut", "Отложено по лимиту",
-                   "garipov_ir@grandtrade.world", "2 / 15"):   # автор по e-mail + индивид. лимит
+                   "garipov_ir@grandtrade.world", "2 / 15",     # автор по e-mail + индивид. лимит
+                   "kirilkin_da@grandtrade.world"):             # автор запуска в «Последних прогонах»
         assert needle in html, needle
 
 

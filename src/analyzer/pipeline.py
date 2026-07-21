@@ -1108,14 +1108,24 @@ def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
         r["usage"] = fctx.usage_snapshot()   # форк стартовал с нуля -> снимок = расход этой задачи
         return r
 
+    def _stamp_author(issue: dict, r: dict) -> None:
+        """Автор запуска (тег-триггер) в запись результата -> runs.jsonl -> дашборд.
+        uid стабилен (резолв в email на дашборде), display — читаемый фолбэк."""
+        a = issue.get("_trigger_author")
+        if a:
+            r.setdefault("author_uid", a[0])
+            r.setdefault("author", a[1])
+
     def _defer(issue: dict, reason: str) -> None:
         r = _defer_task(ctx, issue, workflow, reason)
+        _stamp_author(issue, r)
         ctx.journal.run_event(**r)
         results.append(r)
 
     def _record(issue: dict, r: dict) -> None:
         """Учёт результата в ГЛАВНОМ потоке: траты/счётчики (потому без локов), журнал, лог, брейкер."""
         akey = (issue.get("_trigger_author") or ("",))[0]
+        _stamp_author(issue, r)
         # счётчик автора резервируется при сабмите; разбором НЕ был (skip-гейт или 429) -> возврат резерва
         act = str(r.get("action") or "")
         if g and akey and (act.startswith("skipped") or act == "rate-limited"):
