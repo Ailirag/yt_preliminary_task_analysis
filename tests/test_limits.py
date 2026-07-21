@@ -36,6 +36,7 @@ def _issue(key, author="u1"):
 def _wf_ctx(gate, tagged):
     return SimpleNamespace(
         limit_gate=gate,
+        current_work=None,
         usage={},
         usage_snapshot=lambda: {},
         live=True,

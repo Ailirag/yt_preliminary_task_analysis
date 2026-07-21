@@ -73,6 +73,7 @@ watch:
   profile: ""                    # профиль providers.yaml для демона (пусто = default_profile). Прод на Yandex: "yandex"
   daily_budget: null             # ОБЩИЙ потолок трат за сутки в валюте аналитика ($/₽); null = без лимита. Пример: 5.0
   per_author_daily_limit: 0      # макс. разборов на автора тега за сутки; 0 = без лимита. Пример: 5
+  concurrency: 3                 # сколько задач разбирать ОДНОВРЕМЕННО (1..5; 1 = последовательно). Старт с 3, при упоре в лимиты API снизить
   work_hours: ""                 # окно работы "08:00-20:00" (локальное время); пусто = круглосуточно
   lock_file: "analyzer.lock"     # single-instance lock (в paths.work_dir)
   error_backoff_s: 60            # пауза после ошибки тика (экспоненциально до max_backoff_s)

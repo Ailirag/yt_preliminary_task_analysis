@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import subprocess
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +68,7 @@ class RunContext:
     related_cache: dict = field(default_factory=dict)     # ключ задачи -> готовый текст (кэш на прогон)
     onec_workspaces: list = field(default_factory=list)   # целевые воркспейсы текущей задачи (мульти-система)
     limit_gate: "LimitGate | None" = None                 # лимиты тика демона (None у ручных прогонов)
+    current_work: object = None                           # CurrentWork: учёт задач «в работе» для status (None у ручных)
 
     def add_usage(self, role: str, usage: dict) -> None:
         bucket = self.usage.setdefault(
@@ -989,64 +993,138 @@ def _defer_task(ctx: RunContext, issue: dict, workflow: str, reason: str) -> dic
             "mode": "live" if ctx.live else "dry-run"}
 
 
+def _zero_usage() -> dict:
+    return {"analyst": {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tool_tokens": 0, "calls": 0},
+            "vision": {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "tool_tokens": 0, "calls": 0}}
+
+
+def _fork_for_issue(ctx: RunContext) -> RunContext:
+    """Копия ctx для параллельного разбора ОДНОЙ задачи. Тяжёлые ресурсы (tracker, onec, journal,
+    провайдеры, limit_gate, current_work) — ОБЩИЕ (потокобезопасны или трогаются лишь главным
+    потоком). Пер-задачное изменяемое состояние — СВОЁ: usage (учёт токенов/стоимости),
+    onec_workspaces (целевой воркспейс — иначе задачи затрут маршрутизацию кода друг другу),
+    nav_log, vision_calls, related_cache. usage стартует с нуля -> снимок после = расход задачи."""
+    f = copy.copy(ctx)
+    f.usage = _zero_usage()
+    f.vision_calls = 0
+    f.nav_log = []
+    f.onec_workspaces = []
+    f.related_cache = {}
+    return f
+
+
+def _clamp_concurrency(val) -> int:
+    """Число одновременно разбираемых задач, зажатое в [1, 5]. 1 = прежнее последовательное поведение."""
+    try:
+        return max(1, min(5, int(val or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
 def run_workflow(ctx: RunContext, workflow: str, selection: str, limit: int,
                  issue_key: str | None = None, force: bool = False,
-                 should_stop=None) -> list[dict]:
+                 should_stop=None, concurrency: int = 1) -> list[dict]:
     issues = select_issues(ctx, workflow, selection, limit, issue_key)
-    log.info("К обработке: %d задач(и)", len(issues))
+    total = len(issues)
+    g = ctx.limit_gate
+    concurrency = _clamp_concurrency(concurrency)
+    throttle_s = ctx.acfg.limits.throttle_between_issues_s
+    log.info("К обработке: %d задач(и) | параллельно: %d", total, concurrency)
     results: list[dict] = []
-    consecutive_errors = 0
-    for i, issue in enumerate(issues):
-        if should_stop is not None and should_stop():
-            log.info("Остановка по сигналу — прерываю прогон (обработано %d/%d)", i, len(issues))
-            break
-        # ЛИМИТЫ (только у демона; ручные прогоны limit_gate=None). Гейт ДО начала разбора —
-        # уже начатый разбор всегда доигрывается до конца.
-        g = ctx.limit_gate
-        if g:
-            if g.spend.exceeded(g.today, g.daily_budget, g.ccy):
-                log.info("Дневной бюджет %s %s исчерпан — откладываю остаток (%d задач)",
-                         g.daily_budget, g.ccy, len(issues) - i)
-                for it in issues[i:]:
-                    r = _defer_task(ctx, it, workflow, "budget")
-                    ctx.journal.run_event(**r)
-                    results.append(r)
-                break
-            author = issue.get("_trigger_author")
-            akey = author[0] if author else ""
-            if akey and g.counts.exceeded(g.today, akey, g.per_author_limit):
-                r = _defer_task(ctx, issue, workflow, "author")
-                ctx.journal.run_event(**r)
-                results.append(r)
-                continue
-        before = ctx.usage_snapshot()
+    state = {"consec_errors": 0}   # мутируется только в главном потоке (в теле _record)
+
+    def _work(idx: int, issue: dict, fctx: RunContext) -> dict:
+        """Разбор одной задачи в воркере. Работает на форке ctx (своё состояние);
+        общие ресурсы (onec/tracker/journal/провайдеры/current_work) потокобезопасны."""
+        if fctx.current_work is not None:
+            fctx.current_work.start(issue["key"], workflow)
         try:
-            r = process_issue(ctx, issue, workflow, idx=i + 1, total=len(issues), force=force)
-            consecutive_errors = consecutive_errors + 1 if r.get("action") == "error" else 0
+            r = process_issue(fctx, issue, workflow, idx=idx, total=total, force=force)
         except Exception as e:  # noqa: BLE001
             log.exception("Ошибка обработки %s", issue.get("key"))
             r = {"issue": issue.get("key"), "action": "error", "error": f"{type(e).__name__}: {e}"}
-            consecutive_errors += 1
+        finally:
+            if fctx.current_work is not None:
+                fctx.current_work.finish(issue["key"])
         r["workflow"] = workflow
-        r["mode"] = "live" if ctx.live else "dry-run"
-        r["usage"] = _usage_delta(before, ctx.usage)  # пер-задачный расход по ролям
-        # учёт лимитов: считаем разбор, который РЕАЛЬНО шёл (created/dry-run/error), не skip-гейты.
+        r["mode"] = "live" if fctx.live else "dry-run"
+        r["usage"] = fctx.usage_snapshot()   # форк стартовал с нуля -> снимок = расход этой задачи
+        return r
+
+    def _defer(issue: dict, reason: str) -> None:
+        r = _defer_task(ctx, issue, workflow, reason)
+        ctx.journal.run_event(**r)
+        results.append(r)
+
+    def _record(issue: dict, r: dict) -> None:
+        """Учёт результата в ГЛАВНОМ потоке: траты/счётчики (потому без локов), журнал, лог, брейкер."""
+        akey = (issue.get("_trigger_author") or ("",))[0]
+        # счётчик автора резервируется при сабмите; skip-гейт разбором не был -> возвращаем резерв
+        if g and akey and str(r.get("action") or "").startswith("skipped"):
+            g.counts.add(g.today, akey, -1)
         if g and r.get("action") in ("created", "dry-run", "error"):
-            author = issue.get("_trigger_author")
-            if author and author[0]:
-                g.counts.add(g.today, author[0])
             c, ccy = r.get("cost"), r.get("currency")
             if isinstance(c, (int, float)) and ccy:
                 g.spend.add(g.today, {ccy: c})
         ctx.journal.run_event(**r)
         results.append(r)
-        log.info("[%d/%d] %s -> %s%s (%.0fс)", i + 1, len(issues), r.get("issue"), r.get("action"),
+        state["consec_errors"] = state["consec_errors"] + 1 if r.get("action") == "error" else 0
+        log.info("[%d/%d] %s -> %s%s (%.0fс)", len(results), total, r.get("issue"), r.get("action"),
                  f", подзадача {r['subtask']}" if r.get("subtask") else "", r.get("duration_s") or 0.0)
-        ctx.tracker.finish_iteration()  # полный доступ к созданным — только на время итерации
-        if consecutive_errors >= ctx.acfg.limits.max_consecutive_errors:
-            log.error("Аварийная остановка: %d ошибок подряд", consecutive_errors)
-            break
-        if i < len(issues) - 1:
-            time.sleep(ctx.acfg.limits.throttle_between_issues_s)
+
+    try:
+        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="issue") as pool:
+            futures: dict = {}      # Future -> issue
+            pos = 0
+            stop_submit = False
+            while pos < total or futures:
+                # --- заполняем свободные слоты (гейты последовательны -> без гонок за траты/счётчики) ---
+                while not stop_submit and len(futures) < concurrency and pos < total:
+                    issue = issues[pos]
+                    if should_stop is not None and should_stop():
+                        log.info("Остановка по сигналу — новые задачи не беру (в работе %d)", len(futures))
+                        stop_submit = True
+                        break
+                    if g and g.spend.exceeded(g.today, g.daily_budget, g.ccy):
+                        log.info("Дневной бюджет %s %s исчерпан — откладываю остаток (%d задач)",
+                                 g.daily_budget, g.ccy, total - pos)
+                        for it in issues[pos:]:
+                            _defer(it, "budget")
+                        pos = total
+                        stop_submit = True
+                        break
+                    if g:
+                        akey = (issue.get("_trigger_author") or ("",))[0]
+                        if akey and g.counts.exceeded(g.today, akey, g.per_author_limit):
+                            _defer(issue, "author")
+                            pos += 1
+                            continue
+                        if akey:
+                            g.counts.add(g.today, akey)   # резерв ДО старта: точный лимит при параллели
+                    pool_idx = pos + 1
+                    futures[pool.submit(_work, pool_idx, issue, _fork_for_issue(ctx))] = issue
+                    pos += 1
+                    if throttle_s and pos < total:
+                        time.sleep(throttle_s)            # мягкий разнос стартов (щадим лимиты API)
+                if not futures:
+                    break
+                # --- ждём завершения хотя бы одной; начатые всегда доигрывают ---
+                done, _ = wait(list(futures), return_when=FIRST_COMPLETED)
+                for fut in done:
+                    issue = futures.pop(fut)
+                    try:
+                        r = fut.result()
+                    except Exception as e:  # noqa: BLE001
+                        r = {"issue": issue.get("key"), "action": "error", "workflow": workflow,
+                             "mode": "live" if ctx.live else "dry-run",
+                             "error": f"{type(e).__name__}: {e}"}
+                    _record(issue, r)
+                if state["consec_errors"] >= ctx.acfg.limits.max_consecutive_errors:
+                    log.error("Аварийная остановка: %d ошибок подряд — новые задачи не беру",
+                              state["consec_errors"])
+                    stop_submit = True
+                    pos = total
+    finally:
+        ctx.tracker.finish_iteration()   # полный доступ к созданным — на время всего прогона (не по задаче)
     ctx.journal.run_summary(**summarize_run(results))
     return results

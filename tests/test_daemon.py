@@ -58,7 +58,7 @@ def test_tick_processes_when_candidates(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "analyst_currency", lambda ctx: "$")
     monkeypatch.setattr(daemon, "count_candidates", lambda ctx, wf, sel: 1)
 
-    def fake_run_workflow(ctx, wf, sel, limit, should_stop=None):
+    def fake_run_workflow(ctx, wf, sel, limit, should_stop=None, concurrency=1):
         calls["run"] += 1
         calls["gate"] = ctx.limit_gate              # демон должен собрать и передать gate лимитов
         stop.set()                                  # остановиться после первого тика

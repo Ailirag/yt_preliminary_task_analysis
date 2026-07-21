@@ -47,6 +47,19 @@ def todays_rows(rows: list[dict], today: str) -> list[dict]:
     return [r for r in rows if str(r.get("ts", ""))[:10] == today]
 
 
+def in_progress(current_path: Path, now: float) -> list[dict]:
+    """Задачи в разборе прямо сейчас: [{key, workflow, age_s}] по work/current.json (свежее — первыми)."""
+    try:
+        d = json.loads(Path(current_path).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[dict] = []
+    for key, m in (d.get("tasks") or {}).items():
+        out.append({"key": key, "workflow": m.get("workflow"),
+                    "age_s": max(0.0, now - float(m.get("started_ts", now)))})
+    return sorted(out, key=lambda x: x["age_s"], reverse=True)
+
+
 def budget_state(spent: float, budget: float | None, currency: str) -> dict:
     """Дневной бюджет: {currency, spent, budget, remaining}. remaining=None при отсутствии лимита."""
     remaining = None if not budget else round(float(budget) - float(spent), 2)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,11 +21,13 @@ class Journal:
         self.run_id = run_id
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "dry-run").mkdir(exist_ok=True)
+        self._lock = threading.Lock()   # дозапись из воркеров (writes.jsonl) при параллельном разборе
 
     def _append(self, filename: str, obj: dict) -> None:
         obj = {"ts": now_iso(), "run_id": self.run_id, **obj}
-        with open(self.dir / filename, "a", encoding="utf-8") as f:
-            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        line = json.dumps(obj, ensure_ascii=False) + "\n"
+        with self._lock, open(self.dir / filename, "a", encoding="utf-8") as f:
+            f.write(line)
 
     def run_event(self, **kwargs) -> None:
         self._append("runs.jsonl", kwargs)

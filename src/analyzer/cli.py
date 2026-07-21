@@ -20,7 +20,7 @@ from .journal import Journal, setup_logging
 from .llm import ImagePart, Msg, ToolSpec, build_provider, extract_json
 from .onec import OnecMCP
 from .pipeline import RunContext, build_query, run_workflow, summarize_run
-from .status import budget_state, daemon_state, read_issue_rows, todays_rows
+from .status import budget_state, daemon_state, in_progress, read_issue_rows, todays_rows
 from .tracker import TrackerClient
 from .wiki import WikiClient
 
@@ -158,7 +158,8 @@ def cmd_run(args, workflow: str) -> int:
     selection = getattr(args, "selection", None) or ctx.acfg.bugs.selection
     try:
         results = run_workflow(ctx, workflow, selection, args.limit, args.issue,
-                               force=getattr(args, "force", False))
+                               force=getattr(args, "force", False),
+                               concurrency=getattr(args, "concurrency", 1))
         _print_summary(results, ctx)
         return 0 if all(r.get("action") != "error" for r in results) else 2
     finally:
@@ -202,6 +203,11 @@ def cmd_watch(args) -> int:
             onec.stop()
         ctx.tracker.close()
         ctx.wiki.close()
+
+
+def _fmt_age(s: float) -> str:
+    s = int(s)
+    return f"{s}с" if s < 90 else f"{s // 60}м {s % 60:02d}с"
 
 
 def cmd_status(args) -> int:
@@ -248,7 +254,8 @@ def cmd_status(args) -> int:
     else:
         print("Демон:     НЕ запущен (лок отсутствует)")
     print(f"Режим:     {acfg.mode} | профиль {w.profile or pcfgs.default_profile or '(roles)'} "
-          f"(analyst {a_spec}) | watch: {w.workflow}/{w.selection}, интервал {w.interval_s}с")
+          f"(analyst {a_spec}) | watch: {w.workflow}/{w.selection}, интервал {w.interval_s}с, "
+          f"параллельно {w.concurrency}")
     if b["budget"]:
         print(f"Бюджет:    сегодня {b['spent']} {currency} из {b['budget']} {currency} "
               f"(осталось {b['remaining']} {currency})")
@@ -256,6 +263,12 @@ def cmd_status(args) -> int:
         print(f"Бюджет:    сегодня потрачено {b['spent']} {currency} (дневной лимит не задан)")
     print(f"Очередь:   ~{pending} задач(и) ждут анализа ({w.selection})"
           if pending is not None else "Очередь:   н/д (нет связи с трекером)")
+    ip = in_progress(work / "current.json", now_ts)
+    if ip:
+        parts = ", ".join(f"{t['key']} ({_fmt_age(t['age_s'])})" for t in ip)
+        print(f"В работе:  {parts}" + ("" if st["running"] else "  ⚠ демон неактивен — данные могут быть устаревшими"))
+    else:
+        print("В работе:  —")
     acts = ", ".join(f"{k}={v}" for k, v in sorted(summ["actions"].items())) or "—"
     trust = ", ".join(f"{k}={v}" for k, v in summ["trust"].items()) or "—"
     print(f"Сегодня:   {len(todays)} прогон(ов) | действия: {acts} | доверие: {trust}")
@@ -515,6 +528,8 @@ def _add_run_args(p: argparse.ArgumentParser, with_selection: bool) -> None:
     p.add_argument("--profile", help="Сценарий из providers.yaml: z.ai | yandex | z.ai-yandex")
     p.add_argument("--force", action="store_true",
                    help="Переанализировать, даже если ИИ-подзадача уже есть (создаёт новую версию)")
+    p.add_argument("--concurrency", type=int, default=1,
+                   help="Сколько задач разбирать одновременно (1..5; по умолчанию 1 — последовательно)")
     p.add_argument("--analyst", help="Роль analyst: провайдер/модель (переопределяет профиль)")
     p.add_argument("--vision", help="Роль vision: провайдер/модель; 'none' — отключить (переопределяет профиль)")
 

@@ -18,6 +18,7 @@ from .budget import DailyCounts, DailySpend
 from .lock import LockHeld, SingleInstanceLock
 from .pipeline import (LimitGate, RunContext, analyst_currency, count_candidates,
                        run_workflow)
+from .progress import CurrentWork
 
 log = logging.getLogger("analyzer.daemon")
 
@@ -87,12 +88,13 @@ def run_watch(ctx: RunContext, *, stop: threading.Event, now_fn=time.time) -> No
 
     spend = DailySpend(work_dir / "daily_spend.json")
     counts = DailyCounts(work_dir / "daily_counts.json")
+    ctx.current_work = CurrentWork(work_dir / "current.json")   # учёт «в работе»; сброс устаревших на старте
     ccy = analyst_currency(ctx)
     backoff = 0
     tick = 0
     last_day = _local_date(now_fn())      # без снятия defer на старте — только при реальной смене суток
-    log.info("watch: старт | workflow=%s selection=%s interval=%ss бюджет=%s%s лимит/автор=%s окно=%s",
-             w.workflow, w.selection, w.interval_s,
+    log.info("watch: старт | workflow=%s selection=%s interval=%ss параллельно=%s бюджет=%s%s лимит/автор=%s окно=%s",
+             w.workflow, w.selection, w.interval_s, w.concurrency,
              w.daily_budget if w.daily_budget else "—", f" {ccy}" if w.daily_budget else "",
              w.per_author_daily_limit or "—", w.work_hours or "24/7")
     try:
@@ -119,7 +121,7 @@ def run_watch(ctx: RunContext, *, stop: threading.Event, now_fn=time.time) -> No
                         deferred_tag=ctx.acfg.bugs.deferred_tag)
                     results = run_workflow(ctx, w.workflow, w.selection,
                                            ctx.acfg.limits.max_issues_per_run,
-                                           should_stop=stop.is_set)
+                                           should_stop=stop.is_set, concurrency=w.concurrency)
                     if results:
                         log.info("watch: тик #%d — задач %d, потрачено сегодня %s",
                                  tick, len(results), _fmt_spend(spend, today))

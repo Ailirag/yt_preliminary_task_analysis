@@ -130,6 +130,7 @@ class WatchCfg(BaseModel):
     profile: str = ""                                      # профиль providers.yaml (пусто = default_profile); CLI --profile важнее
     daily_budget: float | None = None                      # ОБЩИЙ потолок трат за сутки в валюте аналитика; None = без лимита
     per_author_daily_limit: int = 0                        # макс. разборов на автора тега за сутки; 0 = без лимита
+    concurrency: int = 3                                   # сколько задач разбирать параллельно (зажим 1..5; 1 = последовательно)
     work_hours: str = ""                                   # окно работы "HH:MM-HH:MM" (локальное); пусто = круглосуточно
     lock_file: str = "analyzer.lock"                       # относительно paths.work_dir
     error_backoff_s: int = 60                              # пауза после ошибки тика (растёт до max_backoff_s)
