@@ -54,9 +54,11 @@ services:
     # Тот же образ и ENTRYPOINT (entrypoint.sh): первый аргумент `sync` включает роль сайдкара
     # (entrypoint настроит git-креды из CORP_GIT_CREDENTIALS и запустит onec-lite sync).
     # --at HH:MM обновляет в заданные часы (в окна низкой активности) — чтобы pull не менял код под ногами
-    # агента посреди разбора; часы в UTC (05:00/12:00 UTC = 08:00/15:00 MSK; для локального времени задайте TZ).
+    # агента посреди разбора. TZ=Europe/Moscow (ниже) => часы трактуются как МСК (в образе есть tzdata).
     # Альтернатива по интервалу: command: ["sync", "--interval", "21600", "--pull"].
-    command: ["sync", "--at", "05:00", "--at", "12:00", "--pull"]
+    command: ["sync", "--at", "23:00", "--at", "00:00", "--at", "01:00", "--at", "08:00", "--pull"]
+    environment:
+      TZ: "Europe/Moscow"          # часы --at считаются по московскому времени
     env_file:
       - /home/adm_garipov_ir/analyzer.env   # ONEC_LITE_STATE (из образа) + CORP_GIT_CREDENTIALS для приватных зеркал
     volumes:
