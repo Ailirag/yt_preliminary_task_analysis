@@ -20,10 +20,11 @@ services:
       # СЕКРЕТЫ (не в git): YATRACKER_TOKEN_GT, YATRACKER_ORGID_GT; ZAI_API_KEY и/или YANDEX_API_KEY+YANDEX_FOLDER_ID (LLM);
       # CORP_GIT_CREDENTIALS — строка git credential-store (https://user:token@git.corp…) для клона приватных зеркал 1С.
       - /home/adm_garipov_ir/analyzer.env
-    # environment:                   # раскомментируйте, если исходящий доступ только через прокси
-    #   HTTP_PROXY: "http://proxy.local:3128"
-    #   HTTPS_PROXY: "http://proxy.local:3128"
-    #   NO_PROXY: "localhost,127.0.0.1"
+    environment:
+      TZ: "Europe/Moscow"            # сутки лимитов/бюджета (сброс в полночь) и метки времени в логах — по МСК
+    #  HTTP_PROXY: "http://proxy.local:3128"   # добавьте сюда, если исходящий доступ только через прокси
+    #  HTTPS_PROXY: "http://proxy.local:3128"
+    #  NO_PROXY: "localhost,127.0.0.1,github.com"
     volumes:
       # git-выгрузка конфигурации УТ (host: git clone/pull, владелец — пользователь), только чтение.
       # ВАЖНО: analyzer.yaml -> onec.dump_path ДОЛЖЕН быть ровно /data/dump (digest FTS зависит от строки пути).
