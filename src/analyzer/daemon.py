@@ -109,8 +109,8 @@ def _resolve_author_maps(ctx: RunContext) -> tuple[dict[str, str], dict[str, int
                 if email in ov_by_email:
                     overrides_by_uid[uid] = ov_by_email[email]
     if overrides_by_uid:
-        log.info("watch: индивидуальные лимиты для %d автор(ов): %s", len(overrides_by_uid),
-                 ", ".join(f"{uid_to_email.get(u, u)}={lim}" for u, lim in overrides_by_uid.items()))
+        pretty = sorted({f"{uid_to_email.get(u, u)}={lim}" for u, lim in overrides_by_uid.items()})
+        log.info("watch: индивидуальные лимиты: %s (uid: %d)", ", ".join(pretty), len(overrides_by_uid))
     return uid_to_email, overrides_by_uid
 
 
