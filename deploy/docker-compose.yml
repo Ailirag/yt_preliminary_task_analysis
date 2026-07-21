@@ -25,6 +25,10 @@ services:
     #  HTTP_PROXY: "http://proxy.local:3128"   # добавьте сюда, если исходящий доступ только через прокси
     #  HTTPS_PROXY: "http://proxy.local:3128"
     #  NO_PROXY: "localhost,127.0.0.1,github.com"
+    ports:
+      # read-only веб-страница статуса демона (watch.status_port). Публикуется ТОЛЬКО на localhost хоста —
+      # доступ снаружи через SSH-туннель:  ssh -L 8020:127.0.0.1:8020 <хост>  ->  http://localhost:8020
+      - "127.0.0.1:8020:8020"
     volumes:
       # прод-конфиг: копия config/analyzer.yaml (мульти-система: systems заполнен, onec.dump_path: "").
       - /home/adm_garipov_ir/analyzer/config/analyzer.yaml:/app/config/analyzer.yaml:ro

@@ -131,6 +131,9 @@ class WatchCfg(BaseModel):
     daily_budget: float | None = None                      # ОБЩИЙ потолок трат за сутки в валюте аналитика; None = без лимита
     per_author_daily_limit: int = 0                        # макс. разборов на автора тега за сутки; 0 = без лимита
     concurrency: int = 3                                   # сколько задач разбирать параллельно (зажим 1..5; 1 = последовательно)
+    status_port: int = 8020                                # порт read-only веб-страницы статуса (0 = выключить)
+    status_host: str = "0.0.0.0"                           # хост привязки (в контейнере 0.0.0.0; наружу порт публикует compose на 127.0.0.1)
+    status_refresh_s: int = 10                             # автообновление страницы статуса, сек
     work_hours: str = ""                                   # окно работы "HH:MM-HH:MM" (локальное); пусто = круглосуточно
     lock_file: str = "analyzer.lock"                       # относительно paths.work_dir
     error_backoff_s: int = 60                              # пауза после ошибки тика (растёт до max_backoff_s)

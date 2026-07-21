@@ -40,7 +40,7 @@ def _fake_ctx(tmp_path):
     return SimpleNamespace(
         acfg=SimpleNamespace(
             queue="ONE",
-            watch=WatchCfg(interval_s=1),
+            watch=WatchCfg(interval_s=1, status_port=0),   # без веб-сервера в юнит-тестах
             paths=PathsCfg(work_dir="work"),
             limits=SimpleNamespace(max_issues_per_run=5),
             bugs=SimpleNamespace(deferred_tag="ИИ_отложено_лимит"),

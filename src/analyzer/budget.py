@@ -98,6 +98,11 @@ class DailyCounts:
         self._rollover(today)
         return self._counts.get(key, 0)
 
+    def all(self, today: str) -> dict[str, int]:
+        """Снимок счётчиков за сегодня {key: n} (для отображения; после rollover пусто)."""
+        self._rollover(today)
+        return dict(self._counts)
+
     def add(self, today: str, key: str, n: int = 1) -> None:
         self._rollover(today)
         self._counts[key] = self._counts.get(key, 0) + int(n)
