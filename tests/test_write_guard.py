@@ -66,3 +66,13 @@ def test_add_comment_dry_run_returns_marker_without_network():
 def test_add_comment_empty_text_is_noop():
     tc = _client()
     assert tc.add_comment("ONE-1", "   ") is None
+
+
+def test_count_ai_subtasks_counts_matching_prefix():
+    tc = _client()
+    tc.search = lambda q, per_page=50, max_pages=1: [
+        {"summary": "[ИИ анализ] ONE-1: x", "key": "ONE-2"},
+        {"summary": "[ИИ анализ] ONE-1: y (v2)", "key": "ONE-3"},
+        {"summary": "[ИИ анализ ФТ] ONE-1: z", "key": "ONE-4"},   # другой воркфлоу — не считаем
+    ]
+    assert tc.count_ai_subtasks("ONE-1", "ИИ анализ", "[ИИ анализ] ") == 2

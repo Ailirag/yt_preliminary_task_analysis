@@ -652,8 +652,8 @@ def workspace_revisions(ctx: "RunContext") -> str:
 
 
 def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
-                  result: AnalysisResult, force: bool = False) -> tuple[str, str | None]:
-    """Возвращает (action, subtask_key). force -> новая версия unique (создать свежую подзадачу)."""
+                  result: AnalysisResult) -> tuple[str, str | None]:
+    """Возвращает (action, subtask_key). Каждый разбор создаёт отдельную подзадачу с номером версии."""
     key = issue["key"]
     wf = ctx.acfg.bugs if workflow == "bugs" else ctx.acfg.ft
     if not ctx.live:
@@ -663,15 +663,19 @@ def write_results(ctx: RunContext, workflow: str, issue: dict, markdown: str,
 
     queue = (issue.get("queue") or {}).get("key") or ctx.acfg.queue
     parent_summary = truncate(issue.get("summary", ""), 90, "")
+    # номер версии = (число уже существующих ИИ-подзадач этого воркфлоу) + 1. Best-effort: поиск
+    # Трекера eventually-consistent, может занизить — тогда номер повторится (косметика, не коллизия).
+    version = ctx.tracker.count_ai_subtasks(key, ctx.acfg.component_name, wf.subtask.summary_prefix) + 1
+    vsuffix = f" (v{version})" if version > 1 else ""
     subtask_key = ctx.tracker.create_subtask(
         queue=queue,
         parent=key,
-        summary=f"{wf.subtask.summary_prefix}{key}: {parent_summary}",
+        summary=f"{wf.subtask.summary_prefix}{key}: {parent_summary}{vsuffix}",
         description=markdown,
         issue_type=wf.subtask.type,
         component_id=ctx.component_id,
-        unique=(f"{wf.subtask.unique_prefix}-{key}-{ctx.journal.run_id}" if force
-                else f"{wf.subtask.unique_prefix}-{key}-v1"),
+        # unique по run_id -> каждый разбор = отдельная подзадача (переразбор не теряется из-за 409).
+        unique=f"{wf.subtask.unique_prefix}-{key}-{ctx.journal.run_id}",
     )
     add = [wf.done_tag, wf.complexity_tags.simple if result.complexity == "simple"
            else wf.complexity_tags.complex]
@@ -767,15 +771,12 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
     ctx.nav_log = []          # след навигации — по текущей задаче
     usage_before = ctx.usage_snapshot()  # база для пер-задачных метрик в отчёте
 
-    # идемпотентность: подзадача уже есть -> только долечить теги (кроме --force: переанализ)
-    existing = ctx.tracker.find_existing_ai_subtask(
-        key, ctx.acfg.component_name, wf.subtask.summary_prefix)
-    if existing and not force:
-        log.info("У %s уже есть ИИ-подзадача %s — долечиваю теги", key, existing)
-        if ctx.live:
-            remove = [ctx.acfg.ft.trigger_tag] if workflow == "ft" else None
-            ctx.tracker.update_tags(key, add=[wf.done_tag], remove=remove)
-        return {"issue": key, "action": "skipped-existing", "subtask": existing}
+    # Идемпотентность по DONE-ТЕГУ (а не по наличию подзадачи): пока done-тега нет, задачу разбираем
+    # заново — даже если ИИ-подзадачи уже есть — и создаём НОВУЮ ВЕРСИЮ подзадачи (v2, v3…).
+    # force — принудительный разбор даже при наличии done-тега (ручной `--force`).
+    if wf.done_tag in (issue.get("tags") or []) and not force:
+        log.info("%s: уже стоит тег %s — пропуск (снимите тег для переразбора)", key, wf.done_tag)
+        return {"issue": key, "action": "skipped-done"}
 
     # ft: обязательная ссылка на документацию
     if workflow == "ft" and ctx.acfg.ft.require_doc_link:
@@ -912,7 +913,7 @@ def process_issue(ctx: RunContext, issue: dict, workflow: str,
         },
     )
 
-    action, subtask = write_results(ctx, workflow, issue, markdown, result, force=force)
+    action, subtask = write_results(ctx, workflow, issue, markdown, result)
     return {
         "issue": key,
         "action": action,

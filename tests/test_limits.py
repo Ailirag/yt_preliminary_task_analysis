@@ -106,6 +106,35 @@ def test_no_gate_means_no_limits(tmp_path, monkeypatch):
 
 # ---------- снятие defer при смене суток ----------
 
+def test_write_results_versions_subtask_and_run_id_unique():
+    """Разбор при отсутствии done-тега создаёт НОВУЮ версию подзадачи: суффикс (vN) в теме,
+    unique по run_id (переразбор не теряется)."""
+    captured = {}
+    ctx = SimpleNamespace(
+        live=True, component_id=478,
+        journal=SimpleNamespace(run_id="20260721-160000-1", dry_run_report=lambda k, m: ""),
+        tracker=SimpleNamespace(
+            count_ai_subtasks=lambda p, c, s: 1,               # уже есть 1 -> новая версия = 2
+            create_subtask=lambda **kw: (captured.update(kw) or "ONE-999"),
+            update_tags=lambda *a, **k: None,
+        ),
+        acfg=SimpleNamespace(
+            queue="ONE", component_name="ИИ анализ",
+            bugs=SimpleNamespace(
+                done_tag="DONE", trigger_tag="TT", selection="trigger-tag",
+                complexity_tags=SimpleNamespace(simple="ИИ-простая", complex="ИИ-сложная"),
+                subtask=SimpleNamespace(type="task", summary_prefix="[ИИ анализ] ", unique_prefix="ai-bug"),
+            ),
+            ft=SimpleNamespace(trigger_tag="ftTT"),
+        ),
+    )
+    issue = {"key": "ONE-1", "summary": "баг", "queue": {"key": "ONE"}, "tags": ["TT"]}
+    action, sub = pipeline.write_results(ctx, "bugs", issue, "отчёт", SimpleNamespace(complexity="complex"))
+    assert action == "created" and sub == "ONE-999"
+    assert "(v2)" in captured["summary"]
+    assert captured["unique"] == "ai-bug-ONE-1-20260721-160000-1"
+
+
 def test_undefer_all_removes_deferred_tag():
     removed = []
     ctx = SimpleNamespace(

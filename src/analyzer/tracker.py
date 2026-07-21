@@ -338,3 +338,14 @@ class TrackerClient:
         if results:
             return results[0].get("key")
         return None
+
+    def count_ai_subtasks(self, parent_key: str, component_name: str, summary_prefix: str) -> int:
+        """Сколько ИИ-подзадач данного воркфлоу уже есть у родителя (для номера версии подзадачи).
+        Best-effort: поиск Трекера eventually-consistent, может занизить — тогда номер версии
+        повторится (косметика; unique подзадачи строится по run_id, коллизии создания не будет)."""
+        try:
+            results = self.search(f'Parent: {parent_key} Components: "{component_name}"',
+                                   per_page=50, max_pages=1)
+        except httpx.HTTPStatusError:
+            return 0
+        return sum(1 for i in results if (i.get("summary") or "").startswith(summary_prefix))
